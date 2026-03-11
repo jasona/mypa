@@ -32,6 +32,7 @@ class TelegramBotService:
 
         self.application = ApplicationBuilder().token(self.token).build()
         self.application.add_handler(CommandHandler("start", self._handle_start))
+        self.application.add_handler(CommandHandler("whoami", self._handle_whoami))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_text))
         await self.application.initialize()
         await self.application.start()
@@ -60,6 +61,14 @@ class TelegramBotService:
     async def _handle_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if update.effective_message:
             await update.effective_message.reply_text("Persistent agent daemon is online.")
+
+    async def _handle_whoami(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not update.effective_message or not update.effective_chat:
+            return
+        await update.effective_message.reply_text(
+            f"chat_id: {update.effective_chat.id}\n"
+            f"chat_type: {update.effective_chat.type}"
+        )
 
     async def _handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.effective_message or not update.effective_chat:
