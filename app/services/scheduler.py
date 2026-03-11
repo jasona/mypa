@@ -92,6 +92,16 @@ class SchedulerService:
             logger.info("Email reasoning summary: %s", result["text"])
         return result
 
+    async def notify_email_received(self, envelope: AgentMailEnvelope) -> None:
+        subject = envelope.subject or "(no subject)"
+        sender = envelope.sender or "unknown sender"
+        preview = f"\nPreview: {envelope.preview}" if envelope.preview else ""
+        await self.telegram.send_message(
+            "Email received\n"
+            f"From: {sender}\n"
+            f"Subject: {subject}{preview}"
+        )
+
     def _tool_handlers(
         self,
         *,

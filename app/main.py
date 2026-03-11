@@ -4,7 +4,7 @@ import json
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from redis.asyncio import Redis
 
 from app.config import get_settings
@@ -99,7 +99,7 @@ async def health(request: Request) -> dict[str, object]:
 
 
 @app.post("/webhooks/agentmail")
-async def agentmail_webhook(request: Request) -> dict:
+async def agentmail_webhook(request: Request, background_tasks: BackgroundTasks) -> dict:
     raw_body = await request.body()
     signature = request.headers.get("X-AgentMail-Signature")
     agentmail = request.app.state.agentmail
@@ -112,8 +112,8 @@ async def agentmail_webhook(request: Request) -> dict:
     telegram = request.app.state.telegram
     try:
         envelope = agentmail.parse_webhook(payload)
-        result = await scheduler.handle_email(envelope)
-        return {"status": "accepted", "result": result}
+        background_tasks.add_task(process_agentmail_event, scheduler, sqlite_store, telegram, payload, envelope)
+        return {"status": "accepted", "event_type": envelope.event_type, "event_id": envelope.event_id}
     except Exception as exc:
         await sqlite_store.save_dead_letter(
             source="agentmail",
@@ -123,3 +123,23 @@ async def agentmail_webhook(request: Request) -> dict:
         )
         await telegram.send_message(f"AgentMail webhook failed: {exc}")
         raise HTTPException(status_code=500, detail="Failed to process webhook") from exc
+
+
+async def process_agentmail_event(scheduler, sqlite_store, telegram, payload: dict, envelope) -> None:
+    try:
+        if envelope.event_type == "message.received":
+            if await scheduler.thread_state.is_processed(envelope.event_id):
+                logger.info("Ignoring duplicate AgentMail event: %s", envelope.event_id)
+                return
+            await scheduler.notify_email_received(envelope)
+            await scheduler.handle_email(envelope)
+            return
+        logger.info("Ignoring unsupported AgentMail event type: %s", envelope.event_type)
+    except Exception as exc:
+        await sqlite_store.save_dead_letter(
+            source="agentmail",
+            payload_json=json.dumps(payload, default=str),
+            error=str(exc),
+            event_id=payload.get("event_id") or payload.get("id"),
+        )
+        await telegram.send_message(f"AgentMail background processing failed: {exc}")

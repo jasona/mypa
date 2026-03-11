@@ -29,10 +29,22 @@ class AgentMailService:
         return hmac.compare_digest(digest, signature)
 
     def parse_webhook(self, payload: dict[str, Any]) -> AgentMailEnvelope:
-        event_id = str(payload.get("event_id") or payload.get("id"))
-        thread_id = str(payload.get("thread_id") or payload.get("thread", {}).get("id"))
-        message_id = str(payload.get("message_id") or payload.get("message", {}).get("id"))
+        event_type = str(payload.get("event_type") or "message.received")
+        event_id = payload.get("event_id") or payload.get("id")
+        thread_id = payload.get("thread_id") or payload.get("thread", {}).get("id")
+        message_id = payload.get("message_id") or payload.get("message", {}).get("id")
         message = payload.get("message", {})
+        from_values = payload.get("from_") or payload.get("from") or message.get("from_") or message.get("from") or []
+        sender_addresses = self._coerce_address_list(from_values)
+        to_addresses = self._coerce_address_list(payload.get("to") or message.get("to") or [])
+        cc_addresses = self._coerce_address_list(payload.get("cc") or message.get("cc") or [])
+        event_id = str(event_id) if event_id is not None else None
+        thread_id = str(thread_id or message.get("thread_id")) if (thread_id or message.get("thread_id")) is not None else None
+        message_id = (
+            str(message_id or message.get("message_id"))
+            if (message_id or message.get("message_id")) is not None
+            else None
+        )
         if not event_id or event_id == "None":
             raise ValueError("AgentMail payload is missing event_id.")
         if not thread_id or thread_id == "None":
@@ -41,21 +53,40 @@ class AgentMailService:
             raise ValueError("AgentMail payload is missing message_id.")
         try:
             return AgentMailEnvelope(
+                event_type=event_type,
                 event_id=event_id,
                 thread_id=thread_id,
                 message_id=message_id,
                 subject=payload.get("subject") or message.get("subject") or "",
-                sender=payload.get("from") or message.get("from") or "",
-                to=payload.get("to") or message.get("to") or [],
-                cc=payload.get("cc") or message.get("cc") or [],
+                sender=sender_addresses[0] if sender_addresses else "unknown sender",
+                sender_addresses=sender_addresses,
+                to=to_addresses,
+                cc=cc_addresses,
+                preview=payload.get("preview") or message.get("preview") or "",
                 body_text=payload.get("body_text") or message.get("text") or "",
                 body_html=payload.get("body_html") or message.get("html"),
                 quoted_text=payload.get("quoted_text") or message.get("quoted_text"),
-                received_at=payload.get("received_at") or message.get("received_at"),
+                received_at=(
+                    payload.get("received_at")
+                    or message.get("timestamp")
+                    or message.get("created_at")
+                    or message.get("updated_at")
+                    or message.get("received_at")
+                ),
             )
         except ValidationError as exc:
             logger.error("Invalid AgentMail payload: %s", exc)
             raise
+
+    @staticmethod
+    def _coerce_address_list(value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value]
+        if isinstance(value, list):
+            return [str(item) for item in value]
+        return [str(value)]
 
     async def reply_email(self, request: EmailReplyRequest) -> dict[str, Any]:
         if not self.api_key:
