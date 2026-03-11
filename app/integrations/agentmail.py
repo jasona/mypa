@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import hmac
 import logging
-from hashlib import sha256
+from collections.abc import Mapping
 from typing import Any
 
 import httpx
 from pydantic import ValidationError
+from svix.webhooks import Webhook, WebhookVerificationError
 
 from app.schemas.email import AgentMailEnvelope, EmailReplyRequest
 from app.services.reliability import retry_async
@@ -20,13 +20,21 @@ class AgentMailService:
         self.api_key = api_key
         self.webhook_secret = webhook_secret
 
-    def verify_signature(self, raw_body: bytes, signature: str | None) -> bool:
+    def verify_signature(self, raw_body: bytes, headers: Mapping[str, str]) -> bool:
         if not self.webhook_secret:
             return True
-        if not signature:
+        svix_headers = {
+            "svix-id": headers.get("svix-id"),
+            "svix-timestamp": headers.get("svix-timestamp"),
+            "svix-signature": headers.get("svix-signature"),
+        }
+        if not all(svix_headers.values()):
             return False
-        digest = hmac.new(self.webhook_secret.encode("utf-8"), raw_body, sha256).hexdigest()
-        return hmac.compare_digest(digest, signature)
+        try:
+            Webhook(self.webhook_secret).verify(raw_body.decode("utf-8"), svix_headers)
+            return True
+        except WebhookVerificationError:
+            return False
 
     def parse_webhook(self, payload: dict[str, Any]) -> AgentMailEnvelope:
         event_type = str(payload.get("event_type") or "message.received")

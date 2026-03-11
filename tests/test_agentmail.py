@@ -1,20 +1,26 @@
-import hmac
-from hashlib import sha256
-
 from app.integrations.agentmail import AgentMailService
 
 
-def test_verify_signature():
+def test_verify_signature_skips_when_secret_missing():
     service = AgentMailService(
         api_base="https://api.agentmail.to",
         api_key=None,
-        webhook_secret="secret",
+        webhook_secret=None,
     )
     body = b'{"hello":"world"}'
-    signature = hmac.new(b"secret", body, sha256).hexdigest()
 
-    assert service.verify_signature(body, signature) is True
-    assert service.verify_signature(body, "bad") is False
+    assert service.verify_signature(body, {}) is True
+
+
+def test_verify_signature_requires_svix_headers():
+    service = AgentMailService(
+        api_base="https://api.agentmail.to",
+        api_key=None,
+        webhook_secret="whsec_test_secret",
+    )
+    body = b'{"hello":"world"}'
+
+    assert service.verify_signature(body, {}) is False
 
 
 def test_parse_message_received_webhook():

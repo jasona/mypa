@@ -101,9 +101,8 @@ async def health(request: Request) -> dict[str, object]:
 @app.post("/webhooks/agentmail")
 async def agentmail_webhook(request: Request, background_tasks: BackgroundTasks) -> dict:
     raw_body = await request.body()
-    signature = request.headers.get("X-AgentMail-Signature")
     agentmail = request.app.state.agentmail
-    if not agentmail.verify_signature(raw_body, signature):
+    if not agentmail.verify_signature(raw_body, request.headers):
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
     payload = await request.json()
