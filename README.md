@@ -1,79 +1,90 @@
-# Persistent Agent Daemon
+# MyPA 🤖📅📨
 
-An always-on personal assistant daemon that lives across chat, email, and calendar.
+An always-on personal assistant that lives in Telegram, email, and your calendar.
 
-This project is built around a simple idea: your assistant should be reachable where work actually happens. Instead of living in a single UI, it can talk to you in Telegram, react to inbound email threads through AgentMail, inspect your Google Calendar, and coordinate scheduling with real tool use instead of brittle text parsing.
+`MyPA` is built for real-world coordination work: understanding inbound email threads, checking availability, proposing times, booking meetings, notifying you in Telegram, and giving you a browser-based admin console to monitor what it is doing.
 
-The result is a small Python service with a practical bias: async, container-friendly, easy to run locally, and designed for autonomous but inspectable actions.
+It is intentionally practical: small, async, container-friendly, operator-visible, and guarded by trust controls instead of blind autonomy.
 
-## Why This Exists
+## Why MyPA Exists
 
-Modern assistants are great at reasoning, but they are often disconnected from the channels where logistics happen. Meeting coordination is a perfect example:
+Most assistants are trapped inside a chat box. Actual scheduling work is not.
 
-- someone emails you asking to meet
-- you want your assistant to understand the thread
-- it should check your availability
-- propose real open times
-- book the event when confirmed
-- and notify you in Telegram when it is done
+It happens in:
 
-That is the spirit of this project: a useful, persistent, operator-friendly assistant with enough memory, guardrails, and integrations to handle real-world coordination.
+- 📱 Telegram when you want quick operator control
+- 📨 Email threads when other people are coordinating with you
+- 📅 Google Calendar when availability and confirmed meetings matter
 
-## What It Does
+MyPA connects those surfaces with a Claude-powered tool loop, durable thread state, and explicit security guardrails.
 
-- runs a FastAPI daemon for inbound webhooks and health checks
-- listens for Telegram messages via long-polling
-- receives inbound email events from AgentMail
-- uses Claude with strict tool schemas for action selection
-- checks Google Calendar availability and manages events
-- stores durable thread state in SQLite with optional Redis caching
-- tracks multi-turn scheduling workflows across email threads
+## What MyPA Can Do
 
-## Documentation
+- 🤖 Answer and act on Telegram requests
+- 📨 Receive AgentMail webhooks and reason over inbound email threads
+- ✉️ Reply to existing email threads and initiate new outbound emails when policy allows
+- 📅 Check Google Calendar availability and create, update, or delete events
+- 🧠 Use strict Claude tool schemas instead of brittle free-form parsing
+- 🗂️ Persist thread state, approvals, proposals, dead letters, and audit events in SQLite
+- ⚡ Optionally use Redis as a cache for active thread state
+- 🔐 Enforce trusted sender/domain controls, Telegram allowlisting, and calendar mutation boundaries
+- 🌐 Expose a password-protected web admin console for operations and review
 
-For setup, configuration, and run guides, start here:
+## Key Features
 
-- [Docs Home](docs/README.md)
+### Operator Surfaces
 
-Direct links:
+- 📱 Telegram long-polling bot for day-to-day control
+- 🌐 Server-rendered `/admin` console for browser-based monitoring and admin actions
 
-- [Prerequisites](docs/prerequisites.md)
-- [Environment Configuration](docs/environment.md)
-- [Anthropic Setup](docs/anthropic.md)
-- [Telegram Setup](docs/telegram.md)
-- [AgentMail Setup](docs/agentmail.md)
-- [Google Calendar Setup](docs/google-calendar.md)
-- [Web Admin](docs/web-admin.md)
-- [Running And Verification](docs/running.md)
+### Scheduling Workflow
 
-## Architecture At A Glance
+- 📨 Understands inbound scheduling threads
+- 📅 Checks live availability
+- ⏱️ Reserves candidate slots
+- ✉️ Sends scheduling responses through AgentMail
+- ✅ Creates confirmed calendar events
+- 🔔 Sends Telegram notifications when important things happen
+
+### Security And Guardrails
+
+- 🔒 Telegram inbound allowlisting
+- 🧾 Trusted sender and trusted domain controls for email automation
+- 🧵 Thread-level approval flow for continued automation on approved threads
+- 🚫 Restrictions on untrusted outbound email initiation
+- 🗓️ Bound-event protection for external calendar mutations
+- 🧹 Redacted/truncated dead-letter storage and minimized untrusted context to the LLM
+- 🚨 Security audit logging and operator alerts
+
+## Architecture
 
 ```text
-Telegram -> daemon -> Claude tool loop
-Email -> AgentMail webhook -> daemon -> Claude tool loop
-Claude tools -> calendar, email reply, Telegram notify, thread state
+Telegram -> MyPA -> Claude tool loop
+AgentMail webhook -> MyPA -> Claude tool loop
+Claude tools -> AgentMail / Google Calendar / Telegram / SQLite / Redis
+Browser admin -> FastAPI /admin -> scheduler + SQLite read models
 ```
 
-The daemon is intentionally small and composable:
+Core building blocks:
 
-- `FastAPI` handles health checks and AgentMail webhook intake
-- `python-telegram-bot` handles direct operator conversation
-- `Anthropic` powers tool-based reasoning
-- `Google Calendar` provides live scheduling context
-- `SQLite` keeps durable thread and event history
-- `Redis` optionally speeds up active thread state access
+- `FastAPI` for health checks, AgentMail webhooks, and the admin UI
+- `python-telegram-bot` for Telegram messaging
+- `Anthropic` for tool-driven reasoning
+- `Google Calendar API` for availability and event management
+- `SQLite` for durable operational state
+- `Redis` for optional active-thread caching
 
-## Quick Start
+## Quick Start 🚀
 
 1. Copy `.env.example` to `.env`.
-2. Follow the guides in [Docs Home](docs/README.md) and fill in the required credentials.
+2. Follow the setup docs in [docs/README.md](docs/README.md).
 3. Install dependencies:
 
 ```bash
 pip install -e .[dev]
 ```
 
-4. Start the app:
+4. Run locally:
 
 ```bash
 uvicorn app.main:app --reload
@@ -85,46 +96,79 @@ uvicorn app.main:app --reload
 docker compose up --build
 ```
 
-6. Verify the service at `GET /health`.
+6. Verify:
+
+- `GET /health`
+- `GET /admin/login` if `WEB_ADMIN_PASSWORD` is configured
 
 ## Configuration Overview
 
-The daemon reads configuration from `.env`.
+MyPA reads configuration from `.env`.
 
-- App/runtime: `APP_ENV`, `APP_TIMEZONE`, `HOST`, `PORT`, `LOG_LEVEL`
-- Anthropic: `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`
-- Telegram: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ADMIN_CHAT_ID`
-- AgentMail: `AGENTMAIL_API_KEY`, `AGENTMAIL_API_BASE`, `AGENTMAIL_WEBHOOK_SECRET`, `AGENTMAIL_INBOX_ADDRESS`
-- Google Calendar: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`, `GOOGLE_CALENDAR_ID`
-- Persistence: `REDIS_URL`, `SQLITE_PATH`
+- ⚙️ Runtime: `APP_ENV`, `APP_TIMEZONE`, `HOST`, `PORT`, `LOG_LEVEL`
+- 🧠 Anthropic: `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`
+- 📱 Telegram: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ADMIN_CHAT_ID`, `TELEGRAM_ALLOWED_CHAT_IDS`, `TELEGRAM_ALLOW_GROUP_CHATS`
+- 📨 AgentMail: `AGENTMAIL_API_KEY`, `AGENTMAIL_API_BASE`, `AGENTMAIL_WEBHOOK_SECRET`, `AGENTMAIL_INBOX_ADDRESS`
+- 📅 Google Calendar: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`, `GOOGLE_CALENDAR_ID`, `WORKSPACE_EMAIL_DOMAIN`, `CALENDAR_ALIAS_MAP_JSON`
+- 🔐 Email trust: `EMAIL_TRUSTED_SENDERS`, `EMAIL_TRUSTED_DOMAINS`, `EMAIL_REQUIRE_TRUST_FOR_AUTOMATION`
+- 🌐 Web admin: `WEB_ADMIN_PASSWORD`, `WEB_SESSION_SECRET`, `WEB_SESSION_MAX_AGE_SECONDS`
+- 💾 Persistence: `REDIS_URL`, `SQLITE_PATH`
 
-Full setup details live in [docs/README.md](docs/README.md).
+Full setup and environment details live in [docs/environment.md](docs/environment.md).
 
-## Endpoints
+## Documentation 📚
+
+Start here:
+
+- [Docs Home](docs/README.md)
+
+Setup and operations guides:
+
+- [Prerequisites](docs/prerequisites.md)
+- [Environment Configuration](docs/environment.md)
+- [Anthropic Setup](docs/anthropic.md)
+- [Telegram Setup](docs/telegram.md)
+- [AgentMail Setup](docs/agentmail.md)
+- [Google Calendar Setup](docs/google-calendar.md)
+- [Web Admin](docs/web-admin.md)
+- [Running And Verification](docs/running.md)
+- [Security Hardening Plan](docs/security-hardening.md)
+
+## HTTP Endpoints
 
 - `GET /health`
-- `GET /admin/login`
 - `POST /webhooks/agentmail`
+- `GET /admin/login`
+- `GET /admin`
 
 ## Project Layout
 
-- `app/main.py`: app bootstrap, lifecycle wiring, and HTTP endpoints
-- `app/integrations/`: Telegram, AgentMail, and Google Calendar adapters
+- `app/main.py`: app bootstrap, lifecycle wiring, and HTTP routes
+- `app/integrations/`: Telegram, AgentMail, and Google Calendar integrations
 - `app/llm/claude_agent.py`: Claude tool-use orchestration
-- `app/services/`: scheduling logic, reliability helpers, and thread state
+- `app/services/`: scheduling, reliability, and thread-state logic
 - `app/db/`: SQLite models and persistence helpers
-- `app/schemas/`: Pydantic schemas for payloads and tool contracts
-- `docs/`: setup and operating guides
-- `tests/`: unit and integration-oriented coverage
+- `app/web/`: web auth and admin routes
+- `templates/admin/`: server-rendered admin templates
+- `docs/`: setup, deployment, and operations guides
+- `tests/`: automated coverage
 
-## Current Status
+## Current State
 
-The core scaffold is in place and ready for configuration:
+MyPA is no longer just a scaffold. The current project includes:
 
-- local Telegram interaction is supported
-- AgentMail webhook ingestion is wired
-- Google Calendar integration is implemented
-- SQLite persistence and dead-letter storage are in place
-- the docs walk through what to configure next
+- ✅ Telegram operator workflow
+- ✅ AgentMail inbound webhook handling
+- ✅ Outbound email reply and send support
+- ✅ Google Calendar reads and mutations
+- ✅ SQLite-backed thread state, approvals, audits, and dead letters
+- ✅ Browser admin console
+- ✅ Security controls around trust, replay, and mutation boundaries
 
-Depending on your AgentMail account or API version, you may need to adjust the outbound reply endpoint or payload shape in `app/integrations/agentmail.py`.
+## Philosophy
+
+MyPA is meant to be helpful, autonomous where appropriate, and inspectable when it matters.
+
+The goal is not to create a mysterious black box assistant.
+
+The goal is to create a personal operations agent you can actually run, monitor, trust, and improve.
