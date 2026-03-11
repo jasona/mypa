@@ -17,6 +17,7 @@ dependencies = [
     "python-telegram-bot>=21.9",
     "redis>=5.2.0",
     "svix>=1.63.0",
+    "tzdata>=2025.2",
     "uvicorn[standard]>=0.34.0",
 ]
 

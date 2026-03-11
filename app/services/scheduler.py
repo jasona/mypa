@@ -58,8 +58,13 @@ class SchedulerService:
             )
             return result["text"] or "Request processed."
         except CalendarAPIError as exc:
-            details = f" Google returned {exc.status_code}." if exc.status_code is not None else ""
-            return f"I couldn't check that calendar right now.{details}"
+            details = []
+            if exc.status_code is not None:
+                details.append(f"Google returned {exc.status_code}.")
+            if exc.response_text:
+                details.append(exc.response_text)
+            suffix = f" {' '.join(details)}" if details else ""
+            return f"I couldn't check that calendar right now.{suffix}"
 
     async def handle_email(self, envelope: AgentMailEnvelope) -> dict:
         if await self.thread_state.is_processed(envelope.event_id):

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -47,18 +49,28 @@ class GoogleCalendarService:
         self._service = None
 
     async def check_availability(self, request: AvailabilityRequest) -> AvailabilityResult:
+        normalized_start = self._ensure_aware_datetime(request.start_at, request.timezone)
+        normalized_end = self._ensure_aware_datetime(request.end_at, request.timezone)
         calendar_ids = self.resolve_calendar_ids(request.calendar_ids or [self.settings.google_calendar_id])
         busy_windows = await self._fetch_busy_windows(
-            request.start_at,
-            request.end_at,
+            normalized_start,
+            normalized_end,
             request.timezone,
             calendar_ids,
         )
-        cursor = request.start_at
+        busy_windows = [
+            {
+                **busy,
+                "start": self._ensure_aware_datetime(busy["start"], request.timezone),
+                "end": self._ensure_aware_datetime(busy["end"], request.timezone),
+            }
+            for busy in busy_windows
+        ]
+        cursor = normalized_start
         slots: list[AvailabilitySlot] = []
         step = timedelta(minutes=30)
         duration = timedelta(minutes=request.duration_minutes)
-        while cursor + duration <= request.end_at:
+        while cursor + duration <= normalized_end:
             candidate_end = cursor + duration
             if not any(self._overlaps(cursor, candidate_end, busy["start"], busy["end"]) for busy in busy_windows):
                 slots.append(AvailabilitySlot(start_at=cursor, end_at=candidate_end, timezone=request.timezone))
@@ -121,7 +133,7 @@ class GoogleCalendarService:
         try:
             response = await asyncio.to_thread(self._freebusy_query, start_at, end_at, timezone, calendar_ids)
         except HttpError as exc:
-            response_text = exc.content.decode("utf-8", errors="replace") if getattr(exc, "content", None) else None
+            response_text = self._decode_google_error_content(exc)
             raise CalendarAPIError(
                 operation="freebusy_query",
                 message="Google Calendar free/busy query failed.",
@@ -250,7 +262,7 @@ class GoogleCalendarService:
         return start_a < end_b and start_b < end_a
 
     def _resolve_calendar_id(self, requested_id: str) -> str:
-        candidate = requested_id.strip()
+        candidate = self._clean_calendar_candidate(requested_id)
         if not candidate:
             return self.settings.google_calendar_id
         if candidate == "primary" or "@" in candidate:
@@ -274,3 +286,34 @@ class GoogleCalendarService:
         if not parts:
             return ""
         return ".".join(parts)
+
+    @staticmethod
+    def _clean_calendar_candidate(value: str) -> str:
+        candidate = value.strip()
+        candidate = re.sub(r"^[<('\"\[]+|[>)'\".,:;!?]+$", "", candidate)
+        if candidate.endswith("'s"):
+            candidate = candidate[:-2]
+        return candidate.strip()
+
+    @staticmethod
+    def _ensure_aware_datetime(value: datetime, timezone_name: str) -> datetime:
+        if value.tzinfo is not None:
+            return value
+        return value.replace(tzinfo=ZoneInfo(timezone_name))
+
+    @staticmethod
+    def _decode_google_error_content(exc: HttpError) -> str | None:
+        raw_content = getattr(exc, "content", None)
+        if not raw_content:
+            return None
+        decoded = raw_content.decode("utf-8", errors="replace")
+        try:
+            payload = json.loads(decoded)
+        except json.JSONDecodeError:
+            return decoded
+        error = payload.get("error")
+        if isinstance(error, dict):
+            message = error.get("message")
+            if isinstance(message, str):
+                return message
+        return decoded

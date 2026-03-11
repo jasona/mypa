@@ -35,8 +35,8 @@ async def test_check_availability_supports_multiple_calendar_ids(monkeypatch):
 
     assert result.queried_calendar_ids == ["jane@example.com", "john@example.com"]
     assert result.busy_windows[0].calendar_id == "jane@example.com"
-    assert result.slots[0].start_at == datetime(2026, 3, 12, 9, 0, 0)
-    assert all(slot.start_at != datetime(2026, 3, 12, 10, 0, 0) for slot in result.slots)
+    assert result.slots[0].start_at.isoformat() == "2026-03-12T09:00:00+00:00"
+    assert all(slot.start_at.isoformat() != "2026-03-12T10:00:00+00:00" for slot in result.slots)
 
 
 def test_resolve_calendar_ids_uses_alias_map():
@@ -57,6 +57,24 @@ def test_resolve_calendar_ids_uses_workspace_domain_fallback():
     resolved = service.resolve_calendar_ids(["Jane Smith", "bob"])
 
     assert resolved == ["jane.smith@example.com", "bob@example.com"]
+
+
+def test_resolve_calendar_ids_cleans_email_punctuation():
+    service = GoogleCalendarService(Settings())
+
+    resolved = service.resolve_calendar_ids(["jane.smith@example.com?", "<bob@example.com>"])
+
+    assert resolved == ["jane.smith@example.com", "bob@example.com"]
+
+
+def test_ensure_aware_datetime_uses_request_timezone():
+    service = GoogleCalendarService(Settings())
+    value = datetime(2026, 3, 12, 9, 0, 0)
+
+    normalized = service._ensure_aware_datetime(value, "America/New_York")
+
+    assert normalized.tzinfo is not None
+    assert normalized.isoformat().endswith("-04:00") or normalized.isoformat().endswith("-05:00")
 
 
 def test_calendar_api_error_exposes_status():
