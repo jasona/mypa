@@ -54,6 +54,8 @@ If `AGENTMAIL_API_KEY` is blank, outbound email replies are simulated.
 - `GOOGLE_CLIENT_SECRET`
 - `GOOGLE_REFRESH_TOKEN`
 - `GOOGLE_CALENDAR_ID`: usually `primary`
+- `WORKSPACE_EMAIL_DOMAIN`: optional fallback domain for resolving coworker names like `Jane Smith` to `jane.smith@yourdomain.com`
+- `CALENDAR_ALIAS_MAP_JSON`: optional JSON map for coworker aliases, for example `{"jane":"jane@yourdomain.com","jane smith":"jane@yourdomain.com"}`
 
 If the Google credentials are missing, calendar reads and writes fall back to simulated behavior.
 

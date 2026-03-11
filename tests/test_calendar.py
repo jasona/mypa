@@ -39,6 +39,26 @@ async def test_check_availability_supports_multiple_calendar_ids(monkeypatch):
     assert all(slot.start_at != datetime(2026, 3, 12, 10, 0, 0) for slot in result.slots)
 
 
+def test_resolve_calendar_ids_uses_alias_map():
+    settings = Settings(
+        CALENDAR_ALIAS_MAP_JSON='{"jane":"jane@example.com","jane smith":"jane.smith@example.com"}'
+    )
+    service = GoogleCalendarService(settings)
+
+    resolved = service.resolve_calendar_ids(["Jane", "Jane Smith"])
+
+    assert resolved == ["jane@example.com", "jane.smith@example.com"]
+
+
+def test_resolve_calendar_ids_uses_workspace_domain_fallback():
+    settings = Settings(WORKSPACE_EMAIL_DOMAIN="example.com")
+    service = GoogleCalendarService(settings)
+
+    resolved = service.resolve_calendar_ids(["Jane Smith", "bob"])
+
+    assert resolved == ["jane.smith@example.com", "bob@example.com"]
+
+
 def test_calendar_api_error_exposes_status():
     error = CalendarAPIError(operation="freebusy_query", message="failed", status_code=403)
 

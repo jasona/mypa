@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -46,7 +47,7 @@ class GoogleCalendarService:
         self._service = None
 
     async def check_availability(self, request: AvailabilityRequest) -> AvailabilityResult:
-        calendar_ids = request.calendar_ids or [self.settings.google_calendar_id]
+        calendar_ids = self.resolve_calendar_ids(request.calendar_ids or [self.settings.google_calendar_id])
         busy_windows = await self._fetch_busy_windows(
             request.start_at,
             request.end_at,
@@ -75,6 +76,14 @@ class GoogleCalendarService:
             ],
             slots=slots,
         )
+
+    def resolve_calendar_ids(self, requested_ids: list[str]) -> list[str]:
+        resolved: list[str] = []
+        for requested_id in requested_ids:
+            resolved_id = self._resolve_calendar_id(requested_id)
+            if resolved_id not in resolved:
+                resolved.append(resolved_id)
+        return resolved
 
     async def create_event(self, event: CalendarEventInput) -> dict[str, Any]:
         payload = {
@@ -239,3 +248,29 @@ class GoogleCalendarService:
     @staticmethod
     def _overlaps(start_a: datetime, end_a: datetime, start_b: datetime, end_b: datetime) -> bool:
         return start_a < end_b and start_b < end_a
+
+    def _resolve_calendar_id(self, requested_id: str) -> str:
+        candidate = requested_id.strip()
+        if not candidate:
+            return self.settings.google_calendar_id
+        if candidate == "primary" or "@" in candidate:
+            return candidate
+
+        normalized = " ".join(candidate.lower().split())
+        alias_map = self.settings.calendar_alias_map
+        if normalized in alias_map:
+            return alias_map[normalized]
+
+        if self.settings.workspace_email_domain:
+            local_part = self._candidate_to_local_part(normalized)
+            if local_part:
+                return f"{local_part}@{self.settings.workspace_email_domain}"
+
+        return candidate
+
+    @staticmethod
+    def _candidate_to_local_part(candidate: str) -> str:
+        parts = re.findall(r"[a-z0-9]+", candidate.lower())
+        if not parts:
+            return ""
+        return ".".join(parts)

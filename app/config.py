@@ -1,3 +1,4 @@
+import json
 from functools import lru_cache
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -35,6 +36,8 @@ class Settings(BaseSettings):
     google_client_secret: str | None = Field(default=None, alias="GOOGLE_CLIENT_SECRET")
     google_refresh_token: str | None = Field(default=None, alias="GOOGLE_REFRESH_TOKEN")
     google_calendar_id: str = Field(default="primary", alias="GOOGLE_CALENDAR_ID")
+    workspace_email_domain: str | None = Field(default=None, alias="WORKSPACE_EMAIL_DOMAIN")
+    calendar_alias_map_json: str | None = Field(default=None, alias="CALENDAR_ALIAS_MAP_JSON")
 
     redis_url: str | None = Field(default=None, alias="REDIS_URL")
     sqlite_path: str = Field(default="data/agent.db", alias="SQLITE_PATH")
@@ -46,6 +49,18 @@ class Settings(BaseSettings):
     @property
     def sqlite_file(self) -> Path:
         return Path(self.sqlite_path)
+
+    @property
+    def calendar_alias_map(self) -> dict[str, str]:
+        if not self.calendar_alias_map_json:
+            return {}
+        try:
+            value = json.loads(self.calendar_alias_map_json)
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(value, dict):
+            return {}
+        return {str(key).strip().lower(): str(mapped_value).strip() for key, mapped_value in value.items()}
 
 
 @lru_cache(maxsize=1)

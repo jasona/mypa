@@ -232,7 +232,7 @@ class SchedulerService:
         return (
             "You are a concise personal assistant operating via Telegram. "
             "Use tools when live data or actions are required. "
-            "If the user asks about coworkers and you know or are given their email/calendar IDs, pass them via check_availability.calendar_ids. "
+            "If the user asks about coworkers, pass their names or email/calendar IDs via check_availability.calendar_ids. "
             "Prefer direct answers and keep the operator informed."
         )
 
