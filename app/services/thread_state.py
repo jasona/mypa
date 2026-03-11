@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC, datetime
+from typing import Any
 
 from redis.asyncio import Redis
+from redis.exceptions import RedisError
 
 from app.db.models import ProposalRecord, ThreadRecord, ThreadStatus
 from app.db.store import SQLiteStore
+
+logger = logging.getLogger(__name__)
 
 
 class ThreadStateStore:
@@ -16,12 +21,12 @@ class ThreadStateStore:
 
     async def get_thread(self, thread_id: str) -> ThreadRecord | None:
         if self.redis_client:
-            cached = await self.redis_client.get(self._thread_key(thread_id))
+            cached = await self._redis_get(self._thread_key(thread_id))
             if cached:
                 return ThreadRecord.model_validate_json(cached)
         record = await self.sqlite_store.get_thread(thread_id)
         if record and self.redis_client:
-            await self.redis_client.set(self._thread_key(thread_id), record.model_dump_json(), ex=7 * 24 * 3600)
+            await self._redis_set(self._thread_key(thread_id), record.model_dump_json(), ex=7 * 24 * 3600)
         return record
 
     async def upsert_thread(
@@ -46,13 +51,13 @@ class ThreadStateStore:
         )
         await self.sqlite_store.upsert_thread(record)
         if self.redis_client:
-            await self.redis_client.set(self._thread_key(thread_id), record.model_dump_json(), ex=7 * 24 * 3600)
+            await self._redis_set(self._thread_key(thread_id), record.model_dump_json(), ex=7 * 24 * 3600)
         return record
 
     async def save_proposal(self, proposal: ProposalRecord) -> None:
         await self.sqlite_store.save_proposal(proposal)
         if self.redis_client:
-            await self.redis_client.set(
+            await self._redis_set(
                 self._proposal_key(proposal.proposal_id),
                 proposal.model_dump_json(),
                 ex=7 * 24 * 3600,
@@ -74,3 +79,31 @@ class ThreadStateStore:
     @staticmethod
     def _proposal_key(proposal_id: str) -> str:
         return f"proposal:{proposal_id}"
+
+    async def _redis_get(self, key: str) -> Any | None:
+        if not self.redis_client:
+            return None
+        try:
+            return await self.redis_client.get(key)
+        except RedisError as exc:
+            await self._disable_redis(exc)
+            return None
+
+    async def _redis_set(self, key: str, value: str, *, ex: int) -> None:
+        if not self.redis_client:
+            return
+        try:
+            await self.redis_client.set(key, value, ex=ex)
+        except RedisError as exc:
+            await self._disable_redis(exc)
+
+    async def _disable_redis(self, exc: RedisError) -> None:
+        if not self.redis_client:
+            return
+        logger.warning("Redis unavailable; falling back to SQLite only: %s", exc)
+        client = self.redis_client
+        self.redis_client = None
+        try:
+            await client.aclose()
+        except Exception:
+            logger.debug("Failed to close Redis client cleanly.", exc_info=True)

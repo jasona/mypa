@@ -59,10 +59,10 @@ If the Google credentials are missing, calendar reads and writes fall back to si
 
 ## Persistence
 
-- `REDIS_URL`: set this to enable active thread caching, for example `redis://localhost:6379/0`
+- `REDIS_URL`: optional Redis cache for active thread state, for example `redis://localhost:6379/0`
 - `SQLITE_PATH`: local SQLite database path, default `data/agent.db`
 
-If `REDIS_URL` is blank, Redis is disabled and the app uses SQLite only.
+Redis is used only as a performance/cache layer for active thread state. If `REDIS_URL` is blank, or Redis is unavailable at runtime, the app falls back to SQLite-only operation.
 
 ## Recommended Minimum `.env`
 
