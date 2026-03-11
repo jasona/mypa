@@ -1,6 +1,6 @@
 import pytest
 
-from app.integrations.agentmail import AgentMailService
+from app.integrations.agentmail import AgentMailAPIError, AgentMailService
 from app.schemas.email import EmailReplyRequest
 
 
@@ -116,3 +116,45 @@ async def test_reply_email_uses_documented_agentmail_endpoint(monkeypatch):
         "reply_all": True,
     }
     assert captured["headers"]["Authorization"] == "Bearer token_123"
+
+
+@pytest.mark.asyncio
+async def test_reply_email_wraps_http_errors(monkeypatch):
+    class DummyResponse:
+        status_code = 401
+        text = '{"message":"Authentication required."}'
+
+        def raise_for_status(self):
+            request = __import__("httpx").Request("POST", "https://api.agentmail.to/v0/inboxes/inbox_123/messages/msg_456/reply")
+            response = __import__("httpx").Response(401, request=request, text=self.text)
+            raise __import__("httpx").HTTPStatusError("Unauthorized", request=request, response=response)
+
+    class DummyClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, json, headers):
+            return DummyResponse()
+
+    monkeypatch.setattr("app.integrations.agentmail.httpx.AsyncClient", lambda timeout: DummyClient())
+
+    service = AgentMailService(
+        api_base="https://api.agentmail.to",
+        api_key="token_123",
+        webhook_secret=None,
+    )
+
+    with pytest.raises(AgentMailAPIError) as exc_info:
+        await service.reply_email(
+            EmailReplyRequest(
+                inbox_id="inbox_123",
+                message_id="msg_456",
+                body_text="Plain text reply",
+            )
+        )
+
+    assert exc_info.value.status_code == 401
+    assert "Authentication required" in (exc_info.value.response_text or "")

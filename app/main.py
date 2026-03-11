@@ -9,7 +9,7 @@ from redis.asyncio import Redis
 
 from app.config import get_settings
 from app.db.store import SQLiteStore
-from app.integrations.agentmail import AgentMailService
+from app.integrations.agentmail import AgentMailAPIError, AgentMailService
 from app.integrations.calendar import GoogleCalendarService
 from app.integrations.telegram import TelegramBotService
 from app.llm.claude_agent import ClaudeAgent
@@ -135,10 +135,28 @@ async def process_agentmail_event(scheduler, sqlite_store, telegram, payload: di
             return
         logger.info("Ignoring unsupported AgentMail event type: %s", envelope.event_type)
     except Exception as exc:
+        logger.exception("AgentMail background processing failed for event %s", envelope.event_id)
         await sqlite_store.save_dead_letter(
             source="agentmail",
             payload_json=json.dumps(payload, default=str),
             error=str(exc),
             event_id=payload.get("event_id") or payload.get("id"),
         )
-        await telegram.send_message(f"AgentMail background processing failed: {exc}")
+        await telegram.send_message(format_background_error(exc))
+
+
+def format_background_error(exc: Exception) -> str:
+    if isinstance(exc, AgentMailAPIError):
+        details = [f"AgentMail {exc.operation} failed"]
+        if exc.status_code is not None:
+            details.append(f"status: {exc.status_code}")
+        if exc.response_text:
+            details.append(f"response: {_trim_text(exc.response_text, 400)}")
+        return "\n".join(details)
+    return f"AgentMail background processing failed: {_trim_text(str(exc), 400)}"
+
+
+def _trim_text(value: str, limit: int) -> str:
+    if len(value) <= limit:
+        return value
+    return value[: limit - 3] + "..."

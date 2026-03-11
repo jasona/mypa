@@ -14,6 +14,23 @@ from app.services.reliability import retry_async
 logger = logging.getLogger(__name__)
 
 
+class AgentMailAPIError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        operation: str,
+        message: str,
+        status_code: int | None = None,
+        response_text: str | None = None,
+        url: str | None = None,
+    ):
+        super().__init__(message)
+        self.operation = operation
+        self.status_code = status_code
+        self.response_text = response_text
+        self.url = url
+
+
 class AgentMailService:
     def __init__(self, api_base: str, api_key: str | None, webhook_secret: str | None):
         self.api_base = api_base.rstrip("/")
@@ -119,19 +136,40 @@ class AgentMailService:
             "reply_to": request.reply_to,
             "reply_all": request.reply_all,
         }
+        url = f"{self.api_base}/v0/inboxes/{request.inbox_id}/messages/{request.message_id}/reply"
         async with httpx.AsyncClient(timeout=30.0) as client:
             async def do_request() -> dict[str, Any]:
                 response = await client.post(
-                    f"{self.api_base}/v0/inboxes/{request.inbox_id}/messages/{request.message_id}/reply",
+                    url,
                     json={key: value for key, value in payload.items() if value not in (None, [], "")},
                     headers=headers,
                 )
                 response.raise_for_status()
                 return response.json()
 
-            return await retry_async(
-                do_request,
-                attempts=3,
-                delay_seconds=1.0,
-                retry_exceptions=(httpx.HTTPError,),
-            )
+            try:
+                return await retry_async(
+                    do_request,
+                    attempts=3,
+                    delay_seconds=1.0,
+                    retry_exceptions=(httpx.HTTPError,),
+                )
+            except httpx.HTTPStatusError as exc:
+                response_text = exc.response.text if exc.response is not None else None
+                raise AgentMailAPIError(
+                    operation="reply_email",
+                    message=(
+                        f"AgentMail reply failed with status {exc.response.status_code}"
+                        if exc.response is not None
+                        else "AgentMail reply failed with HTTP status error"
+                    ),
+                    status_code=exc.response.status_code if exc.response is not None else None,
+                    response_text=response_text,
+                    url=str(exc.request.url) if exc.request is not None else url,
+                ) from exc
+            except httpx.RequestError as exc:
+                raise AgentMailAPIError(
+                    operation="reply_email",
+                    message=f"AgentMail request failed: {exc}",
+                    url=str(exc.request.url) if exc.request is not None else url,
+                ) from exc
