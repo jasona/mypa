@@ -82,3 +82,12 @@ class SecurityAuditRecord(BaseModel):
     target: str | None = None
     metadata_json: str = "{}"
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class DeadLetterRecord(BaseModel):
+    id: int
+    source: str
+    event_id: str | None = None
+    payload_json: str
+    error: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

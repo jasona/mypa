@@ -10,8 +10,9 @@ If you are starting from scratch, use the docs in this order:
 4. [Telegram Setup](telegram.md)
 5. [AgentMail Setup](agentmail.md)
 6. [Google Calendar Setup](google-calendar.md)
-7. [Running And Verification](running.md)
-8. [Security Hardening Plan](security-hardening.md)
+7. [Web Admin](web-admin.md)
+8. [Running And Verification](running.md)
+9. [Security Hardening Plan](security-hardening.md)
 
 ## What Each Guide Covers
 
@@ -21,6 +22,7 @@ If you are starting from scratch, use the docs in this order:
 - [Telegram Setup](telegram.md): bot creation, token setup, and admin chat ID
 - [AgentMail Setup](agentmail.md): inbox, webhook, signature validation, and outbound reply notes
 - [Google Calendar Setup](google-calendar.md): OAuth credentials, refresh token, and calendar scopes
+- [Web Admin](web-admin.md): browser login, session settings, CSRF protection, and the `/admin` console
 - [Running And Verification](running.md): local run, Docker run, health checks, and end-to-end smoke tests
 - [Security Hardening Plan](security-hardening.md): phased implementation plan for abuse prevention and production hardening
 

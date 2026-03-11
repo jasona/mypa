@@ -1,0 +1,23 @@
+{% extends "admin/base.html" %}
+{% block title %}Operator Tools{% endblock %}
+{% block content %}
+<div class="panel">
+    <h2>Operator Tools</h2>
+    <p class="muted">This submits the same kind of admin request you would normally send via Telegram.</p>
+    <form method="post" action="/admin/tools/message">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label for="operator_prompt">Instruction</label>
+        <textarea id="operator_prompt" name="operator_prompt" rows="6" required>{{ operator_prompt }}</textarea>
+        <div style="margin-top: 12px;">
+            <button type="submit">Run Request</button>
+        </div>
+    </form>
+</div>
+
+{% if result_text is not none %}
+<div class="panel">
+    <h2>Result</h2>
+    <div class="mono">{{ result_text or "(no response)" }}</div>
+</div>
+{% endif %}
+{% endblock %}

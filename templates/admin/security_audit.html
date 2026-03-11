@@ -1,0 +1,57 @@
+{% extends "admin/base.html" %}
+{% block title %}Security Audit{% endblock %}
+{% block content %}
+<div class="panel">
+    <h2>Security Audit</h2>
+    <form method="get" action="/admin/security-audit" class="grid">
+        <div>
+            <label for="source">Source</label>
+            <input id="source" name="source" value="{{ selected_source }}" placeholder="agentmail or telegram">
+        </div>
+        <div>
+            <label for="action">Action</label>
+            <input id="action" name="action" value="{{ selected_action }}" placeholder="approve_sender">
+        </div>
+        <div>
+            <label for="decision">Decision</label>
+            <input id="decision" name="decision" value="{{ selected_decision }}" placeholder="allowed or denied">
+        </div>
+        <div style="align-self: end;">
+            <button type="submit">Filter</button>
+        </div>
+    </form>
+
+    {% if audits %}
+    <table>
+        <thead>
+            <tr>
+                <th>When</th>
+                <th>Source</th>
+                <th>Actor</th>
+                <th>Action</th>
+                <th>Decision</th>
+                <th>Reason</th>
+                <th>Target</th>
+                <th>Metadata</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for audit in audits %}
+            <tr>
+                <td>{{ audit.record.created_at }}</td>
+                <td>{{ audit.record.source }}</td>
+                <td>{{ audit.record.actor or "-" }}</td>
+                <td>{{ audit.record.action }}</td>
+                <td>{{ audit.record.decision }}</td>
+                <td>{{ audit.record.reason }}</td>
+                <td>{{ audit.record.target or "-" }}</td>
+                <td><div class="mono">{{ audit.metadata_pretty }}</div></td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No audit events matched the current filters.</p>
+    {% endif %}
+</div>
+{% endblock %}

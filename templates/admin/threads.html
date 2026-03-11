@@ -1,0 +1,54 @@
+{% extends "admin/base.html" %}
+{% block title %}Threads{% endblock %}
+{% block content %}
+<div class="panel">
+    <h2>Threads</h2>
+    <form method="get" action="/admin/threads" class="grid">
+        <div>
+            <label for="status">Status</label>
+            <select id="status" name="status">
+                <option value="">All</option>
+                {% for status in statuses %}
+                <option value="{{ status }}" {% if selected_status == status %}selected{% endif %}>{{ status }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label for="search">Search</label>
+            <input id="search" name="search" value="{{ search }}" placeholder="subject, participant, or thread id">
+        </div>
+        <div style="align-self: end;">
+            <button type="submit">Filter</button>
+        </div>
+    </form>
+
+    {% if threads %}
+    <table>
+        <thead>
+            <tr>
+                <th>Thread</th>
+                <th>Subject</th>
+                <th>Participants</th>
+                <th>Status</th>
+                <th>Approved</th>
+                <th>Updated</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for thread in threads %}
+            <tr>
+                <td><a href="/admin/threads/{{ thread.record.thread_id }}">{{ thread.record.thread_id }}</a></td>
+                <td>{{ thread.record.subject or "(no subject)" }}</td>
+                <td>{{ ", ".join(thread.participants) }}</td>
+                <td>{{ thread.record.status.value }}</td>
+                <td>{{ "yes" if thread.record.approved_for_automation else "no" }}</td>
+                <td>{{ thread.record.updated_at }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No threads matched the current filters.</p>
+    {% endif %}
+</div>
+{% endblock %}

@@ -29,6 +29,15 @@ class ThreadStateStore:
             await self._redis_set(self._thread_key(thread_id), record.model_dump_json(), ex=7 * 24 * 3600)
         return record
 
+    async def list_threads(
+        self,
+        *,
+        limit: int = 100,
+        status: ThreadStatus | None = None,
+        search: str | None = None,
+    ) -> list[ThreadRecord]:
+        return await self.sqlite_store.list_threads(limit=limit, status=status, search=search)
+
     async def upsert_thread(
         self,
         thread_id: str,
@@ -68,6 +77,9 @@ class ThreadStateStore:
     async def list_active_proposals(self, thread_id: str) -> list[ProposalRecord]:
         return await self.sqlite_store.list_active_proposals(thread_id)
 
+    async def list_proposals(self, thread_id: str) -> list[ProposalRecord]:
+        return await self.sqlite_store.list_proposals(thread_id)
+
     async def is_processed(self, event_id: str) -> bool:
         return await self.sqlite_store.is_event_processed(event_id)
 
@@ -79,6 +91,9 @@ class ThreadStateStore:
 
     async def add_trusted_sender(self, sender: str) -> None:
         await self.sqlite_store.add_trusted_sender(sender)
+
+    async def list_trusted_senders(self):
+        return await self.sqlite_store.list_trusted_senders()
 
     async def queue_pending_email_approval(
         self,
@@ -99,6 +114,9 @@ class ThreadStateStore:
 
     async def list_pending_email_approvals(self, sender: str):
         return await self.sqlite_store.list_pending_email_approvals(sender)
+
+    async def list_all_pending_email_approvals(self):
+        return await self.sqlite_store.list_all_pending_email_approvals()
 
     async def delete_pending_email_approval(self, approval_id: int) -> None:
         await self.sqlite_store.delete_pending_email_approval(approval_id)
@@ -159,6 +177,27 @@ class ThreadStateStore:
             target=target,
             since_iso=since_iso,
         )
+
+    async def list_security_audit_events(
+        self,
+        *,
+        limit: int = 200,
+        source: str | None = None,
+        action: str | None = None,
+        decision: str | None = None,
+    ):
+        return await self.sqlite_store.list_security_audit_events(
+            limit=limit,
+            source=source,
+            action=action,
+            decision=decision,
+        )
+
+    async def list_dead_letters(self, *, limit: int = 100):
+        return await self.sqlite_store.list_dead_letters(limit=limit)
+
+    async def get_dashboard_summary(self) -> dict[str, int]:
+        return await self.sqlite_store.get_dashboard_summary()
 
     @staticmethod
     def _thread_key(thread_id: str) -> str:

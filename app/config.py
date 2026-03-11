@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     telegram_admin_chat_id: str | None = Field(default=None, alias="TELEGRAM_ADMIN_CHAT_ID")
     telegram_allowed_chat_ids_raw: str | None = Field(default=None, alias="TELEGRAM_ALLOWED_CHAT_IDS")
     telegram_allow_group_chats: bool = Field(default=False, alias="TELEGRAM_ALLOW_GROUP_CHATS")
+    web_admin_password: str | None = Field(default=None, alias="WEB_ADMIN_PASSWORD")
+    web_session_secret: str | None = Field(default=None, alias="WEB_SESSION_SECRET")
+    web_session_max_age_seconds: int = Field(default=60 * 60 * 12, alias="WEB_SESSION_MAX_AGE_SECONDS")
 
     agentmail_api_key: str | None = Field(default=None, alias="AGENTMAIL_API_KEY")
     agentmail_api_base: str = Field(default="https://api.agentmail.to", alias="AGENTMAIL_API_BASE")
@@ -94,6 +97,18 @@ class Settings(BaseSettings):
         if not value:
             return set()
         return {item.strip() for item in value.split(",") if item.strip()}
+
+    @property
+    def web_admin_enabled(self) -> bool:
+        return bool(self.web_admin_password)
+
+    @property
+    def effective_web_session_secret(self) -> str:
+        if self.web_session_secret:
+            return self.web_session_secret
+        if self.web_admin_password:
+            return f"web-session::{self.web_admin_password}"
+        return "web-session::disabled"
 
 
 @lru_cache(maxsize=1)

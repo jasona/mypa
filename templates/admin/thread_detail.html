@@ -1,0 +1,101 @@
+{% extends "admin/base.html" %}
+{% block title %}Thread Detail{% endblock %}
+{% block content %}
+<div class="panel">
+    <h2>{{ thread.subject or "(no subject)" }}</h2>
+    <p><strong>Thread ID:</strong> <span class="mono">{{ thread.thread_id }}</span></p>
+    <p><strong>Status:</strong> {{ thread.status.value }}</p>
+    <p><strong>Approved for automation:</strong> {{ "yes" if thread.approved_for_automation else "no" }}</p>
+    <p><strong>Participants:</strong> {{ ", ".join(participants) }}</p>
+    <p><strong>Last decision:</strong> {{ thread.last_decision or "-" }}</p>
+    <p><strong>Updated:</strong> {{ thread.updated_at }}</p>
+    {% if thread.summary %}
+    <p><strong>Summary:</strong> {{ thread.summary }}</p>
+    {% endif %}
+    <div class="actions">
+        <form method="post" action="/admin/actions/trust-thread" class="inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="thread_id" value="{{ thread.thread_id }}">
+            <input type="hidden" name="redirect_to" value="/admin/threads/{{ thread.thread_id }}">
+            <button type="submit">Trust Thread</button>
+        </form>
+        <form method="post" action="/admin/actions/reject-thread" class="inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="thread_id" value="{{ thread.thread_id }}">
+            <input type="hidden" name="redirect_to" value="/admin/threads/{{ thread.thread_id }}">
+            <button type="submit">Reject Thread</button>
+        </form>
+    </div>
+</div>
+
+<div class="panel">
+    <h2>Proposals</h2>
+    {% if proposals %}
+    <table>
+        <thead>
+            <tr>
+                <th>Proposal</th>
+                <th>Start</th>
+                <th>End</th>
+                <th>Timezone</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for proposal in proposals %}
+            <tr>
+                <td class="mono">{{ proposal.proposal_id }}</td>
+                <td>{{ proposal.start_at }}</td>
+                <td>{{ proposal.end_at }}</td>
+                <td>{{ proposal.timezone }}</td>
+                <td>{{ proposal.status.value }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No proposals stored for this thread.</p>
+    {% endif %}
+</div>
+
+<div class="panel">
+    <h2>Bound Calendar Events</h2>
+    {% if bound_event_ids %}
+    <ul>
+        {% for event_id in bound_event_ids %}
+        <li><span class="mono">{{ event_id }}</span></li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted">No bound calendar events.</p>
+    {% endif %}
+</div>
+
+<div class="panel">
+    <h2>Pending Approvals</h2>
+    {% if pending_approvals %}
+    <table>
+        <thead>
+            <tr>
+                <th>Sender</th>
+                <th>Subject</th>
+                <th>Event</th>
+                <th>Created</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for approval in pending_approvals %}
+            <tr>
+                <td>{{ approval.sender }}</td>
+                <td>{{ approval.subject or "(no subject)" }}</td>
+                <td class="mono">{{ approval.event_id }}</td>
+                <td>{{ approval.created_at }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No pending approvals for this thread.</p>
+    {% endif %}
+</div>
+{% endblock %}

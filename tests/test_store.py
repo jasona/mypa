@@ -116,6 +116,70 @@ async def test_security_audit_events_round_trip(tmp_path):
 
     assert recent == 1
 
+    events = await store.list_security_audit_events(limit=10, source="telegram")
+    assert len(events) == 1
+    assert events[0].action == "unauthorized_access"
+
+
+@pytest.mark.asyncio
+async def test_admin_read_models_round_trip(tmp_path):
+    store = SQLiteStore(tmp_path / "agent.db")
+    await store.initialize()
+
+    await store.upsert_thread(
+        ThreadRecord(
+            thread_id="thread-1",
+            subject="Customer follow up",
+            participants_json='["admin@example.com","outside@example.com"]',
+            status=ThreadStatus.AWAITING_CONFIRMATION,
+            approved_for_automation=True,
+            updated_at=datetime.now(UTC),
+        )
+    )
+    await store.add_trusted_sender("outside@example.com")
+    await store.queue_pending_email_approval(
+        sender="outside@example.com",
+        event_id="evt-1",
+        thread_id="thread-1",
+        subject="Need approval",
+        envelope_json="{}",
+    )
+    await store.add_security_audit_event(
+        source="agentmail",
+        actor="outside@example.com",
+        action="email_automation_gate",
+        decision="denied",
+        reason="thread_not_trusted_for_automation",
+        target="thread-1",
+    )
+    await store.save_dead_letter(
+        source="agentmail",
+        event_id="evt-2",
+        payload_json='{"event_id":"evt-2"}',
+        error="boom",
+    )
+
+    threads = await store.list_threads(search="Customer", limit=10)
+    assert len(threads) == 1
+    assert threads[0].thread_id == "thread-1"
+
+    trusted = await store.list_trusted_senders()
+    assert [record.sender for record in trusted] == ["outside@example.com"]
+
+    pending = await store.list_all_pending_email_approvals()
+    assert len(pending) == 1
+    assert pending[0].event_id == "evt-1"
+
+    dead_letters = await store.list_dead_letters(limit=10)
+    assert len(dead_letters) == 1
+    assert dead_letters[0].event_id == "evt-2"
+
+    summary = await store.get_dashboard_summary()
+    assert summary["thread_count"] == 1
+    assert summary["pending_approval_count"] == 1
+    assert summary["dead_letter_count"] == 1
+    assert summary["trusted_sender_count"] == 1
+
 
 @pytest.mark.asyncio
 async def test_thread_state_falls_back_to_sqlite_when_redis_fails(tmp_path):

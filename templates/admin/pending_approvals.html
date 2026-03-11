@@ -1,0 +1,60 @@
+{% extends "admin/base.html" %}
+{% block title %}Pending Approvals{% endblock %}
+{% block content %}
+<div class="panel">
+    <h2>Pending Email Approvals</h2>
+    {% if approvals %}
+    <table>
+        <thead>
+            <tr>
+                <th>Sender</th>
+                <th>Subject</th>
+                <th>Thread</th>
+                <th>Created</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for approval in approvals %}
+            <tr>
+                <td>{{ approval.sender }}</td>
+                <td>{{ approval.subject or "(no subject)" }}</td>
+                <td><a href="/admin/threads/{{ approval.thread_id }}">{{ approval.thread_id }}</a></td>
+                <td>{{ approval.created_at }}</td>
+                <td>
+                    <div class="actions">
+                        <form method="post" action="/admin/actions/trust-sender" class="inline">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <input type="hidden" name="sender" value="{{ approval.sender }}">
+                            <input type="hidden" name="redirect_to" value="/admin/pending-approvals">
+                            <button type="submit">Trust Sender</button>
+                        </form>
+                        <form method="post" action="/admin/actions/reject-sender" class="inline">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <input type="hidden" name="sender" value="{{ approval.sender }}">
+                            <input type="hidden" name="redirect_to" value="/admin/pending-approvals">
+                            <button type="submit">Reject Sender</button>
+                        </form>
+                        <form method="post" action="/admin/actions/trust-thread" class="inline">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <input type="hidden" name="thread_id" value="{{ approval.thread_id }}">
+                            <input type="hidden" name="redirect_to" value="/admin/pending-approvals">
+                            <button type="submit">Trust Thread</button>
+                        </form>
+                        <form method="post" action="/admin/actions/reject-thread" class="inline">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <input type="hidden" name="thread_id" value="{{ approval.thread_id }}">
+                            <input type="hidden" name="redirect_to" value="/admin/pending-approvals">
+                            <button type="submit">Reject Thread</button>
+                        </form>
+                    </div>
+                </td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No pending approvals.</p>
+    {% endif %}
+</div>
+{% endblock %}

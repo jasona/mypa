@@ -68,6 +68,16 @@ class SchedulerService:
             suffix = f" {' '.join(details)}" if details else ""
             return f"I couldn't check that calendar right now.{suffix}"
 
+    async def handle_browser_operator_message(self, text: str) -> str:
+        return await self.handle_telegram_message(
+            TelegramInboundMessage(
+                chat_id="web-admin",
+                text=text,
+                message_id=f"web-{uuid4()}",
+                sent_at=datetime.now(UTC),
+            )
+        )
+
     async def handle_email(self, envelope: AgentMailEnvelope) -> dict:
         return await self._process_email_envelope(envelope)
 

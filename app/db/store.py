@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import aiosqlite
 
 from app.db.models import (
+    DeadLetterRecord,
     PendingEmailApprovalRecord,
     ProposalRecord,
     ProposalStatus,
@@ -153,6 +154,48 @@ class SQLiteStore:
             updated_at=datetime.fromisoformat(row[8]),
         )
 
+    async def list_threads(
+        self,
+        *,
+        limit: int = 100,
+        status: ThreadStatus | None = None,
+        search: str | None = None,
+    ) -> list[ThreadRecord]:
+        query = (
+            "SELECT thread_id, subject, participants_json, status, approved_for_automation, summary, "
+            "last_message_id, last_decision, updated_at FROM threads"
+        )
+        params: list[object] = []
+        clauses: list[str] = []
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status.value)
+        if search:
+            clauses.append("(thread_id LIKE ? OR subject LIKE ? OR participants_json LIKE ?)")
+            needle = f"%{search}%"
+            params.extend([needle, needle, needle])
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(query, tuple(params))
+            rows = await cursor.fetchall()
+        return [
+            ThreadRecord(
+                thread_id=row[0],
+                subject=row[1],
+                participants_json=row[2],
+                status=ThreadStatus(row[3]),
+                approved_for_automation=bool(row[4]),
+                summary=row[5],
+                last_message_id=row[6],
+                last_decision=row[7],
+                updated_at=datetime.fromisoformat(row[8]),
+            )
+            for row in rows
+        ]
+
     async def upsert_thread(self, record: ThreadRecord) -> None:
         async with aiosqlite.connect(self.path) as db:
             await db.execute(
@@ -244,6 +287,31 @@ class SQLiteStore:
             for row in rows
         ]
 
+    async def list_proposals(self, thread_id: str) -> list[ProposalRecord]:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                """
+                SELECT proposal_id, thread_id, start_at, end_at, timezone, status, created_at
+                FROM proposals
+                WHERE thread_id = ?
+                ORDER BY created_at DESC
+                """,
+                (thread_id,),
+            )
+            rows = await cursor.fetchall()
+        return [
+            ProposalRecord(
+                proposal_id=row[0],
+                thread_id=row[1],
+                start_at=datetime.fromisoformat(row[2]),
+                end_at=datetime.fromisoformat(row[3]),
+                timezone=row[4],
+                status=ProposalStatus(row[5]),
+                created_at=datetime.fromisoformat(row[6]),
+            )
+            for row in rows
+        ]
+
     async def is_event_processed(self, event_id: str) -> bool:
         async with aiosqlite.connect(self.path) as db:
             cursor = await db.execute(
@@ -307,6 +375,21 @@ class SQLiteStore:
             await db.commit()
         return record
 
+    async def list_trusted_senders(self) -> list[TrustedSenderRecord]:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                """
+                SELECT sender, added_at
+                FROM trusted_senders
+                ORDER BY added_at DESC
+                """
+            )
+            rows = await cursor.fetchall()
+        return [
+            TrustedSenderRecord(sender=row[0], added_at=datetime.fromisoformat(row[1]))
+            for row in rows
+        ]
+
     async def queue_pending_email_approval(
         self,
         *,
@@ -344,6 +427,29 @@ class SQLiteStore:
                 ORDER BY created_at ASC
                 """,
                 (sender.strip().lower(),),
+            )
+            rows = await cursor.fetchall()
+        return [
+            PendingEmailApprovalRecord(
+                id=row[0],
+                sender=row[1],
+                event_id=row[2],
+                thread_id=row[3],
+                subject=row[4],
+                envelope_json=row[5],
+                created_at=datetime.fromisoformat(row[6]),
+            )
+            for row in rows
+        ]
+
+    async def list_all_pending_email_approvals(self) -> list[PendingEmailApprovalRecord]:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                """
+                SELECT id, sender, event_id, thread_id, subject, envelope_json, created_at
+                FROM pending_email_approvals
+                ORDER BY created_at ASC
+                """
             )
             rows = await cursor.fetchall()
         return [
@@ -498,6 +604,51 @@ class SQLiteStore:
         record.id = cursor.lastrowid
         return record
 
+    async def list_security_audit_events(
+        self,
+        *,
+        limit: int = 200,
+        source: str | None = None,
+        action: str | None = None,
+        decision: str | None = None,
+    ) -> list[SecurityAuditRecord]:
+        query = (
+            "SELECT id, source, actor, action, decision, reason, target, metadata_json, created_at "
+            "FROM security_audit_events"
+        )
+        clauses: list[str] = []
+        params: list[object] = []
+        if source:
+            clauses.append("source = ?")
+            params.append(source)
+        if action:
+            clauses.append("action = ?")
+            params.append(action)
+        if decision:
+            clauses.append("decision = ?")
+            params.append(decision)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(query, tuple(params))
+            rows = await cursor.fetchall()
+        return [
+            SecurityAuditRecord(
+                id=row[0],
+                source=row[1],
+                actor=row[2],
+                action=row[3],
+                decision=row[4],
+                reason=row[5],
+                target=row[6],
+                metadata_json=row[7],
+                created_at=datetime.fromisoformat(row[8]),
+            )
+            for row in rows
+        ]
+
     async def count_recent_security_audit_events(
         self,
         *,
@@ -517,6 +668,57 @@ class SQLiteStore:
             )
             row = await cursor.fetchone()
         return int(row[0]) if row else 0
+
+    async def list_dead_letters(self, *, limit: int = 100) -> list[DeadLetterRecord]:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                """
+                SELECT id, source, event_id, payload_json, error, created_at
+                FROM dead_letters
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+            rows = await cursor.fetchall()
+        return [
+            DeadLetterRecord(
+                id=row[0],
+                source=row[1],
+                event_id=row[2],
+                payload_json=row[3],
+                error=row[4],
+                created_at=datetime.fromisoformat(row[5]),
+            )
+            for row in rows
+        ]
+
+    async def get_dashboard_summary(self) -> dict[str, int]:
+        async with aiosqlite.connect(self.path) as db:
+            pending_cursor = await db.execute("SELECT COUNT(*) FROM pending_email_approvals")
+            pending_count = int((await pending_cursor.fetchone())[0])
+            dead_cursor = await db.execute("SELECT COUNT(*) FROM dead_letters")
+            dead_count = int((await dead_cursor.fetchone())[0])
+            thread_cursor = await db.execute("SELECT COUNT(*) FROM threads")
+            thread_count = int((await thread_cursor.fetchone())[0])
+            sender_cursor = await db.execute("SELECT COUNT(*) FROM trusted_senders")
+            sender_count = int((await sender_cursor.fetchone())[0])
+            audit_cursor = await db.execute(
+                """
+                SELECT COUNT(*)
+                FROM security_audit_events
+                WHERE created_at >= ?
+                """,
+                ((datetime.now(UTC) - timedelta(days=7)).isoformat(),),
+            )
+            recent_audit_count = int((await audit_cursor.fetchone())[0])
+        return {
+            "thread_count": thread_count,
+            "pending_approval_count": pending_count,
+            "dead_letter_count": dead_count,
+            "trusted_sender_count": sender_count,
+            "recent_security_event_count": recent_audit_count,
+        }
 
     @staticmethod
     def dump_participants(participants: list[str]) -> str:

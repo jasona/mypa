@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from redis.asyncio import Redis
+from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import get_settings
 from app.db.store import SQLiteStore
@@ -16,6 +17,7 @@ from app.llm.claude_agent import ClaudeAgent
 from app.logging import configure_logging
 from app.services.scheduler import SchedulerService
 from app.services.thread_state import ThreadStateStore
+from app.web.routes import router as admin_router
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +103,17 @@ async def lifespan(app: FastAPI):
             await redis_client.aclose()
 
 
+_settings = get_settings()
+
 app = FastAPI(title="Persistent Agent Daemon", lifespan=lifespan)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=_settings.effective_web_session_secret,
+    same_site="lax",
+    https_only=_settings.app_env != "development",
+    max_age=_settings.web_session_max_age_seconds,
+)
+app.include_router(admin_router)
 
 
 @app.get("/health")

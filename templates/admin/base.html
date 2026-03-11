@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}MyPA Admin{% endblock %}</title>
+    <style>
+        :root {
+            color-scheme: light dark;
+            --bg: #111827;
+            --panel: #1f2937;
+            --panel-alt: #374151;
+            --text: #f9fafb;
+            --muted: #d1d5db;
+            --accent: #60a5fa;
+            --success: #34d399;
+            --error: #f87171;
+            --border: #4b5563;
+        }
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+        }
+        a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+        header, main {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 16px 20px;
+        }
+        nav {
+            display: flex;
+            gap: 14px;
+            flex-wrap: wrap;
+            margin-top: 10px;
+        }
+        nav a {
+            padding: 6px 10px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--panel);
+        }
+        .active {
+            border-color: var(--accent);
+        }
+        .panel {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 16px;
+        }
+        .card {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 12px;
+        }
+        th, td {
+            text-align: left;
+            padding: 10px;
+            border-bottom: 1px solid var(--border);
+            vertical-align: top;
+        }
+        input, select, textarea, button {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 8px 10px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            background: var(--panel-alt);
+            color: var(--text);
+        }
+        button {
+            cursor: pointer;
+            width: auto;
+        }
+        form.inline {
+            display: inline-block;
+            margin-right: 8px;
+        }
+        .flash {
+            padding: 10px 12px;
+            border-radius: 6px;
+            margin-bottom: 16px;
+        }
+        .flash.success {
+            background: rgba(52, 211, 153, 0.16);
+            border: 1px solid var(--success);
+        }
+        .flash.error {
+            background: rgba(248, 113, 113, 0.16);
+            border: 1px solid var(--error);
+        }
+        .muted {
+            color: var(--muted);
+        }
+        .actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .mono {
+            font-family: Consolas, monospace;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>MyPA Admin</h1>
+        {% if current_path != "/admin/login" %}
+        <nav>
+            <a href="/admin" class="{% if current_path == '/admin' %}active{% endif %}">Dashboard</a>
+            <a href="/admin/threads" class="{% if current_path.startswith('/admin/threads') %}active{% endif %}">Threads</a>
+            <a href="/admin/pending-approvals" class="{% if current_path == '/admin/pending-approvals' %}active{% endif %}">Approvals</a>
+            <a href="/admin/trusted-senders" class="{% if current_path == '/admin/trusted-senders' %}active{% endif %}">Trusted Senders</a>
+            <a href="/admin/security-audit" class="{% if current_path == '/admin/security-audit' %}active{% endif %}">Security Audit</a>
+            <a href="/admin/dead-letters" class="{% if current_path == '/admin/dead-letters' %}active{% endif %}">Dead Letters</a>
+            <a href="/admin/settings" class="{% if current_path == '/admin/settings' %}active{% endif %}">Settings</a>
+            <a href="/admin/tools" class="{% if current_path == '/admin/tools' %}active{% endif %}">Operator Tools</a>
+        </nav>
+        <form method="post" action="/admin/logout" style="margin-top: 12px;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit">Log Out</button>
+        </form>
+        {% endif %}
+    </header>
+    <main>
+        {% if flash %}
+        <div class="flash {{ flash.kind }}">{{ flash.message }}</div>
+        {% endif %}
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>

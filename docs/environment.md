@@ -38,8 +38,12 @@ If `ANTHROPIC_API_KEY` is blank, the service still starts, but autonomous reason
 - `TELEGRAM_ADMIN_CHAT_ID`: optional but strongly recommended for operator notifications
 - `TELEGRAM_ALLOWED_CHAT_IDS`: optional comma-separated allowlist for inbound operator chats. If left blank, the app falls back to `TELEGRAM_ADMIN_CHAT_ID` for inbound authorization when that value is set.
 - `TELEGRAM_ALLOW_GROUP_CHATS`: defaults to `false`. Keep this disabled unless you explicitly want the bot to operate in group chats.
+- `WEB_ADMIN_PASSWORD`: optional but required if you want the browser admin UI at `/admin`
+- `WEB_SESSION_SECRET`: strongly recommended when `WEB_ADMIN_PASSWORD` is set. Used to sign the browser session cookie.
+- `WEB_SESSION_MAX_AGE_SECONDS`: optional session lifetime in seconds. Defaults to `43200`.
 
 If `TELEGRAM_BOT_TOKEN` is blank, Telegram polling is disabled.
+If `WEB_ADMIN_PASSWORD` is blank, the browser admin UI is disabled.
 
 ## AgentMail
 

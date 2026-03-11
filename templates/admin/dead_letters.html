@@ -1,0 +1,33 @@
+{% extends "admin/base.html" %}
+{% block title %}Dead Letters{% endblock %}
+{% block content %}
+<div class="panel">
+    <h2>Dead Letters</h2>
+    {% if dead_letters %}
+    <table>
+        <thead>
+            <tr>
+                <th>When</th>
+                <th>Source</th>
+                <th>Event</th>
+                <th>Error</th>
+                <th>Payload</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for dead_letter in dead_letters %}
+            <tr>
+                <td>{{ dead_letter.record.created_at }}</td>
+                <td>{{ dead_letter.record.source }}</td>
+                <td>{{ dead_letter.record.event_id or "-" }}</td>
+                <td>{{ dead_letter.record.error }}</td>
+                <td><div class="mono">{{ dead_letter.payload_pretty }}</div></td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No dead letters have been recorded.</p>
+    {% endif %}
+</div>
+{% endblock %}

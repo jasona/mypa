@@ -43,6 +43,7 @@ Direct links:
 - [Telegram Setup](docs/telegram.md)
 - [AgentMail Setup](docs/agentmail.md)
 - [Google Calendar Setup](docs/google-calendar.md)
+- [Web Admin](docs/web-admin.md)
 - [Running And Verification](docs/running.md)
 
 ## Architecture At A Glance
@@ -102,6 +103,7 @@ Full setup details live in [docs/README.md](docs/README.md).
 ## Endpoints
 
 - `GET /health`
+- `GET /admin/login`
 - `POST /webhooks/agentmail`
 
 ## Project Layout

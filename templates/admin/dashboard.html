@@ -1,0 +1,112 @@
+{% extends "admin/base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div class="grid">
+    <div class="card">
+        <div class="muted">Threads</div>
+        <div><strong>{{ summary.thread_count }}</strong></div>
+    </div>
+    <div class="card">
+        <div class="muted">Pending Approvals</div>
+        <div><strong>{{ summary.pending_approval_count }}</strong></div>
+    </div>
+    <div class="card">
+        <div class="muted">Trusted Senders</div>
+        <div><strong>{{ summary.trusted_sender_count }}</strong></div>
+    </div>
+    <div class="card">
+        <div class="muted">Dead Letters</div>
+        <div><strong>{{ summary.dead_letter_count }}</strong></div>
+    </div>
+    <div class="card">
+        <div class="muted">Security Events (7d)</div>
+        <div><strong>{{ summary.recent_security_event_count }}</strong></div>
+    </div>
+</div>
+
+<div class="panel">
+    <h2>Recent Pending Approvals</h2>
+    {% if recent_approvals %}
+    <table>
+        <thead>
+            <tr>
+                <th>Sender</th>
+                <th>Subject</th>
+                <th>Thread</th>
+                <th>Created</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for approval in recent_approvals %}
+            <tr>
+                <td>{{ approval.sender }}</td>
+                <td>{{ approval.subject or "(no subject)" }}</td>
+                <td><a href="/admin/threads/{{ approval.thread_id }}">{{ approval.thread_id }}</a></td>
+                <td>{{ approval.created_at }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No queued approvals.</p>
+    {% endif %}
+</div>
+
+<div class="panel">
+    <h2>Recent Security Audit Events</h2>
+    {% if recent_audits %}
+    <table>
+        <thead>
+            <tr>
+                <th>When</th>
+                <th>Source</th>
+                <th>Action</th>
+                <th>Decision</th>
+                <th>Reason</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for audit in recent_audits %}
+            <tr>
+                <td>{{ audit.created_at }}</td>
+                <td>{{ audit.source }}</td>
+                <td>{{ audit.action }}</td>
+                <td>{{ audit.decision }}</td>
+                <td>{{ audit.reason }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No recent audit events.</p>
+    {% endif %}
+</div>
+
+<div class="panel">
+    <h2>Recent Dead Letters</h2>
+    {% if recent_dead_letters %}
+    <table>
+        <thead>
+            <tr>
+                <th>When</th>
+                <th>Source</th>
+                <th>Event</th>
+                <th>Error</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for dead_letter in recent_dead_letters %}
+            <tr>
+                <td>{{ dead_letter.created_at }}</td>
+                <td>{{ dead_letter.source }}</td>
+                <td>{{ dead_letter.event_id or "-" }}</td>
+                <td>{{ dead_letter.error }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No dead letters recorded.</p>
+    {% endif %}
+</div>
+{% endblock %}

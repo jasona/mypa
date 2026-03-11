@@ -1,0 +1,54 @@
+{% extends "admin/base.html" %}
+{% block title %}Trusted Senders{% endblock %}
+{% block content %}
+<div class="panel">
+    <h2>Trusted Senders From SQLite</h2>
+    {% if db_senders %}
+    <table>
+        <thead>
+            <tr>
+                <th>Sender</th>
+                <th>Added At</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for sender in db_senders %}
+            <tr>
+                <td>{{ sender.sender }}</td>
+                <td>{{ sender.added_at }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No SQLite-trusted senders yet.</p>
+    {% endif %}
+</div>
+
+<div class="grid">
+    <div class="panel">
+        <h2>Trusted Senders From Env</h2>
+        {% if env_senders %}
+        <ul>
+            {% for sender in env_senders %}
+            <li>{{ sender }}</li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p class="muted">No env sender allowlist configured.</p>
+        {% endif %}
+    </div>
+    <div class="panel">
+        <h2>Trusted Domains From Env</h2>
+        {% if env_domains %}
+        <ul>
+            {% for domain in env_domains %}
+            <li>{{ domain }}</li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p class="muted">No env domain allowlist configured.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
