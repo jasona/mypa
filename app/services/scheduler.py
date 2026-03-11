@@ -103,11 +103,12 @@ class SchedulerService:
     async def notify_email_received(self, envelope: AgentMailEnvelope) -> None:
         subject = envelope.subject or "(no subject)"
         sender = envelope.sender or "unknown sender"
-        preview = f"\nPreview: {envelope.preview}" if envelope.preview else ""
+        summary = self.summarize_email(envelope)
         await self.telegram.send_message(
-            "Email received\n"
+            "New email received\n"
             f"From: {sender}\n"
-            f"Subject: {subject}{preview}"
+            f"Subject: {subject}\n"
+            f"Summary: {summary}"
         )
 
     def _tool_handlers(
@@ -256,3 +257,16 @@ class SchedulerService:
             "last_decision": thread.last_decision,
             "updated_at": thread.updated_at.isoformat(),
         }
+
+    @staticmethod
+    def summarize_email(envelope: AgentMailEnvelope) -> str:
+        raw_text = envelope.preview or envelope.body_text or ""
+        normalized = " ".join(raw_text.split())
+        for marker in (" Best,", " Thanks,", " Regards,", " Sincerely,", " -- ", " From: "):
+            if marker in normalized:
+                normalized = normalized.split(marker, 1)[0].strip()
+        if not normalized:
+            return "No preview available."
+        if len(normalized) <= 160:
+            return normalized
+        return normalized[:157].rstrip() + "..."
