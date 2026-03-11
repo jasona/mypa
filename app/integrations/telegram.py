@@ -87,7 +87,7 @@ class TelegramBotService:
         if not await self._authorize_update(update):
             return
         if update.effective_message:
-            await update.effective_message.reply_text("Persistent agent daemon is online.")
+            await update.effective_message.reply_text("🤖 MyPA is online and ready.")
 
     async def _handle_whoami(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorize_update(update):
@@ -95,8 +95,8 @@ class TelegramBotService:
         if not update.effective_message or not update.effective_chat:
             return
         await update.effective_message.reply_text(
-            f"chat_id: {update.effective_chat.id}\n"
-            f"chat_type: {update.effective_chat.type}"
+            f"🆔 Chat ID: {update.effective_chat.id}\n"
+            f"💬 Chat type: {update.effective_chat.type}"
         )
 
     async def _handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -139,10 +139,10 @@ class TelegramBotService:
             return
         sender = " ".join(context.args).strip()
         if not sender:
-            await update.effective_message.reply_text(f"Usage: /{command_name} sender@example.com")
+            await update.effective_message.reply_text(f"ℹ️ Usage: /{command_name} sender@example.com")
             return
         if not callback:
-            await update.effective_message.reply_text("This command is not configured.")
+            await update.effective_message.reply_text("⚠️ This command is not configured.")
             return
         reply = await callback(sender)
         if reply:
@@ -166,5 +166,5 @@ class TelegramBotService:
         if self.on_unauthorized_access:
             await self.on_unauthorized_access(chat_id, chat_type)
         if update.effective_message and chat_type == "private":
-            await update.effective_message.reply_text("This bot is not authorized for this chat.")
+            await update.effective_message.reply_text("⛔ This bot is not authorized for this chat.")
         return False

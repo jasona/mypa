@@ -354,7 +354,7 @@ async def test_handle_email_blocks_untrusted_sender_when_policy_enabled():
     assert scheduler.thread_state.marked == ("evt-1", "agentmail")
     assert scheduler.thread_state.queued is not None
     assert scheduler.telegram.messages
-    assert "Email automation blocked for untrusted sender" in scheduler.telegram.messages[0][0]
+    assert "🚫 Email automation blocked for untrusted sender" in scheduler.telegram.messages[0][0]
     assert "/trust_sender attacker@evil.com" in scheduler.telegram.messages[0][0]
 
 
@@ -818,7 +818,7 @@ async def test_handle_unauthorized_telegram_access_records_and_alerts():
     await scheduler.handle_unauthorized_telegram_access("999", "private")
 
     assert scheduler.thread_state.audit[0]["reason"] == "chat_not_allowlisted"
-    assert "unauthorized Telegram access blocked" in scheduler.telegram.messages[0]
+    assert "🚨 Security alert: unauthorized Telegram access blocked" in scheduler.telegram.messages[0]
 
 
 @pytest.mark.asyncio

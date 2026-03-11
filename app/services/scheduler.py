@@ -315,10 +315,10 @@ class SchedulerService:
         sender = envelope.sender or "unknown sender"
         summary = self.summarize_email(envelope, max_chars=120)
         await self.telegram.send_message(
-            "New email received\n"
-            f"From: {sender}\n"
-            f"Subject: {subject}\n"
-            f"Summary: {summary}"
+            "📥 New email received\n"
+            f"👤 From: {sender}\n"
+            f"📝 Subject: {subject}\n"
+            f"🧠 Summary: {summary}"
         )
 
     def _tool_handlers(
@@ -407,10 +407,10 @@ class SchedulerService:
                             target=envelope.thread_id,
                         )
                         await self.telegram.send_message(
-                            "Security alert: blocked outbound email initiation\n"
-                            f"From: {envelope.sender}\n"
-                            f"Thread: {envelope.thread_id}\n"
-                            "Reason: sender is not trusted to start a new outbound email."
+                            "🚨 Security alert: blocked outbound email initiation\n"
+                            f"👤 From: {envelope.sender}\n"
+                            f"🧵 Thread: {envelope.thread_id}\n"
+                            "🛑 Reason: sender is not trusted to start a new outbound email."
                         )
                     return {
                         "status": "blocked",
@@ -458,7 +458,10 @@ class SchedulerService:
                     last_decision="create_event",
                 )
                 await self.telegram.send_message(
-                    f"Meeting confirmed from {source}: {event.title} on {event.start_at.isoformat()}",
+                    "📅 Meeting confirmed\n"
+                    f"📍 Source: {source}\n"
+                    f"📝 Title: {event.title}\n"
+                    f"🕒 Start: {event.start_at.isoformat()}",
                 )
             return result
 
@@ -475,10 +478,10 @@ class SchedulerService:
                     metadata={"thread_id": envelope.thread_id},
                 )
                 await self.telegram.send_message(
-                    "Security alert: blocked external email calendar update\n"
-                    f"From: {envelope.sender}\n"
-                    f"Thread: {envelope.thread_id}\n"
-                    f"Event ID: {event.event_id}"
+                    "🚨 Security alert: blocked external email calendar update\n"
+                    f"👤 From: {envelope.sender}\n"
+                    f"🧵 Thread: {envelope.thread_id}\n"
+                    f"🗓️ Event ID: {event.event_id}"
                 )
                 return {
                     "status": "blocked",
@@ -501,10 +504,10 @@ class SchedulerService:
                     metadata={"thread_id": envelope.thread_id},
                 )
                 await self.telegram.send_message(
-                    "Security alert: blocked external email calendar deletion\n"
-                    f"From: {envelope.sender}\n"
-                    f"Thread: {envelope.thread_id}\n"
-                    f"Event ID: {event_id}"
+                    "🚨 Security alert: blocked external email calendar deletion\n"
+                    f"👤 From: {envelope.sender}\n"
+                    f"🧵 Thread: {envelope.thread_id}\n"
+                    f"🗓️ Event ID: {event_id}"
                 )
                 return {
                     "status": "blocked",
@@ -654,12 +657,12 @@ class SchedulerService:
             f"{envelope.sender.strip().lower()} to trust this sender, process queued email, and allow future automation."
         )
         return (
-            "Email automation blocked for untrusted sender\n"
-            f"From: {envelope.sender}\n"
-            f"Thread: {envelope.thread_id}\n"
-            f"Subject: {subject}\n"
-            f"Status: {status}\n"
-            f"Optional thread approval: /trust_thread {envelope.thread_id}"
+            "🚫 Email automation blocked for untrusted sender\n"
+            f"👤 From: {envelope.sender}\n"
+            f"🧵 Thread: {envelope.thread_id}\n"
+            f"📝 Subject: {subject}\n"
+            f"📌 Status: {status}\n"
+            f"✅ Optional thread approval: /trust_thread {envelope.thread_id}"
         )
 
     @staticmethod
@@ -749,9 +752,9 @@ class SchedulerService:
         )
         if recent_count >= 3:
             await self.telegram.send_message(
-                "Security alert: AgentMail replay burst detected\n"
-                f"Event ID: {event_id}\n"
-                f"Recent duplicates: {recent_count}"
+                "🚨 Security alert: AgentMail replay burst detected\n"
+                f"🧾 Event ID: {event_id}\n"
+                f"🔁 Recent duplicates: {recent_count}"
             )
 
     async def handle_unauthorized_telegram_access(self, chat_id: str, chat_type: str) -> None:
@@ -765,7 +768,7 @@ class SchedulerService:
             metadata={"chat_type": chat_type},
         )
         await self.telegram.send_message(
-            "Security alert: unauthorized Telegram access blocked\n"
-            f"Chat ID: {chat_id}\n"
-            f"Chat type: {chat_type}"
+            "🚨 Security alert: unauthorized Telegram access blocked\n"
+            f"🆔 Chat ID: {chat_id}\n"
+            f"💬 Chat type: {chat_type}"
         )

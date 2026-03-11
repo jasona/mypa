@@ -160,7 +160,7 @@ async def agentmail_webhook(request: Request, background_tasks: BackgroundTasks)
             error=str(exc),
             event_id=payload.get("event_id") or payload.get("id"),
         )
-        await telegram.send_message(f"AgentMail webhook failed: {exc}")
+        await telegram.send_message(f"🚨 AgentMail webhook failed\n🛑 Error: {exc}")
         raise HTTPException(status_code=500, detail="Failed to process webhook") from exc
 
 
@@ -188,13 +188,13 @@ async def process_agentmail_event(scheduler, sqlite_store, telegram, settings, p
 
 def format_background_error(exc: Exception) -> str:
     if isinstance(exc, AgentMailAPIError):
-        details = [f"AgentMail {exc.operation} failed"]
+        details = [f"🚨 AgentMail {exc.operation} failed"]
         if exc.status_code is not None:
-            details.append(f"status: {exc.status_code}")
+            details.append(f"📟 Status: {exc.status_code}")
         if exc.response_text:
-            details.append(f"response: {_trim_text(exc.response_text, 400)}")
+            details.append(f"📄 Response: {_trim_text(exc.response_text, 400)}")
         return "\n".join(details)
-    return f"AgentMail background processing failed: {_trim_text(str(exc), 400)}"
+    return f"🚨 AgentMail background processing failed\n🛑 Error: {_trim_text(str(exc), 400)}"
 
 
 def _trim_text(value: str, limit: int) -> str:
