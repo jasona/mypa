@@ -9,7 +9,7 @@ from app.config import Settings
 from app.db.models import ProposalRecord, ThreadStatus
 from app.db.store import SQLiteStore
 from app.integrations.agentmail import AgentMailService
-from app.integrations.calendar import GoogleCalendarService
+from app.integrations.calendar import CalendarAPIError, GoogleCalendarService
 from app.integrations.telegram import TelegramBotService
 from app.llm.claude_agent import ClaudeAgent
 from app.schemas.calendar import AvailabilityRequest, CalendarEventInput, CalendarEventUpdate
@@ -48,14 +48,18 @@ class SchedulerService:
             "update_event",
             "delete_event",
         }
-        result = await self.agent.run(
-            prompt=f"Telegram message from operator:\n{message.text}",
-            system_prompt=self._telegram_system_prompt(),
-            tool_handlers=self._tool_handlers(source="telegram", telegram_message=message),
-            extra_context=extra_context,
-            allowed_tool_names=allowed_tool_names,
-        )
-        return result["text"] or "Request processed."
+        try:
+            result = await self.agent.run(
+                prompt=f"Telegram message from operator:\n{message.text}",
+                system_prompt=self._telegram_system_prompt(),
+                tool_handlers=self._tool_handlers(source="telegram", telegram_message=message),
+                extra_context=extra_context,
+                allowed_tool_names=allowed_tool_names,
+            )
+            return result["text"] or "Request processed."
+        except CalendarAPIError as exc:
+            details = f" Google returned {exc.status_code}." if exc.status_code is not None else ""
+            return f"I couldn't check that calendar right now.{details}"
 
     async def handle_email(self, envelope: AgentMailEnvelope) -> dict:
         if await self.thread_state.is_processed(envelope.event_id):
@@ -132,8 +136,12 @@ class SchedulerService:
 
         async def check_availability(payload: dict) -> dict:
             request = AvailabilityRequest.model_validate(payload)
-            slots = await self.calendar.check_availability(request)
-            return {"slots": [slot.model_dump(mode="json") for slot in slots[:10]]}
+            result = await self.calendar.check_availability(request)
+            return {
+                "queried_calendar_ids": result.queried_calendar_ids,
+                "busy_windows": [window.model_dump(mode="json") for window in result.busy_windows],
+                "slots": [slot.model_dump(mode="json") for slot in result.slots[:10]],
+            }
 
         async def reserve_slots(payload: dict) -> dict:
             thread_id = payload["thread_id"]
@@ -224,6 +232,7 @@ class SchedulerService:
         return (
             "You are a concise personal assistant operating via Telegram. "
             "Use tools when live data or actions are required. "
+            "If the user asks about coworkers and you know or are given their email/calendar IDs, pass them via check_availability.calendar_ids. "
             "Prefer direct answers and keep the operator informed."
         )
 

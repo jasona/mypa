@@ -6,9 +6,17 @@ from typing import Any
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 from app.config import Settings
-from app.schemas.calendar import AvailabilityRequest, AvailabilitySlot, CalendarEventInput, CalendarEventUpdate
+from app.schemas.calendar import (
+    AvailabilityRequest,
+    AvailabilityResult,
+    AvailabilitySlot,
+    BusyWindow,
+    CalendarEventInput,
+    CalendarEventUpdate,
+)
 from app.services.reliability import retry_async
 
 SCOPES = [
@@ -17,13 +25,34 @@ SCOPES = [
 ]
 
 
+class CalendarAPIError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        operation: str,
+        message: str,
+        status_code: int | None = None,
+        response_text: str | None = None,
+    ):
+        super().__init__(message)
+        self.operation = operation
+        self.status_code = status_code
+        self.response_text = response_text
+
+
 class GoogleCalendarService:
     def __init__(self, settings: Settings):
         self.settings = settings
         self._service = None
 
-    async def check_availability(self, request: AvailabilityRequest) -> list[AvailabilitySlot]:
-        busy_windows = await self._fetch_busy_windows(request.start_at, request.end_at, request.timezone)
+    async def check_availability(self, request: AvailabilityRequest) -> AvailabilityResult:
+        calendar_ids = request.calendar_ids or [self.settings.google_calendar_id]
+        busy_windows = await self._fetch_busy_windows(
+            request.start_at,
+            request.end_at,
+            request.timezone,
+            calendar_ids,
+        )
         cursor = request.start_at
         slots: list[AvailabilitySlot] = []
         step = timedelta(minutes=30)
@@ -33,7 +62,19 @@ class GoogleCalendarService:
             if not any(self._overlaps(cursor, candidate_end, busy["start"], busy["end"]) for busy in busy_windows):
                 slots.append(AvailabilitySlot(start_at=cursor, end_at=candidate_end, timezone=request.timezone))
             cursor += step
-        return slots
+        return AvailabilityResult(
+            queried_calendar_ids=calendar_ids,
+            busy_windows=[
+                BusyWindow(
+                    calendar_id=busy["calendar_id"],
+                    start_at=busy["start"],
+                    end_at=busy["end"],
+                    timezone=request.timezone,
+                )
+                for busy in busy_windows
+            ],
+            slots=slots,
+        )
 
     async def create_event(self, event: CalendarEventInput) -> dict[str, Any]:
         payload = {
@@ -59,18 +100,37 @@ class GoogleCalendarService:
         events = await asyncio.to_thread(self._events_list, now, max_time)
         return events.get("items", [])
 
-    async def _fetch_busy_windows(self, start_at: datetime, end_at: datetime, timezone: str) -> list[dict[str, datetime]]:
+    async def _fetch_busy_windows(
+        self,
+        start_at: datetime,
+        end_at: datetime,
+        timezone: str,
+        calendar_ids: list[str],
+    ) -> list[dict[str, Any]]:
         if not self._credentials_ready:
             return []
-        response = await asyncio.to_thread(self._freebusy_query, start_at, end_at, timezone)
-        busy = response.get("calendars", {}).get(self.settings.google_calendar_id, {}).get("busy", [])
-        return [
-            {
-                "start": datetime.fromisoformat(item["start"].replace("Z", "+00:00")),
-                "end": datetime.fromisoformat(item["end"].replace("Z", "+00:00")),
-            }
-            for item in busy
-        ]
+        try:
+            response = await asyncio.to_thread(self._freebusy_query, start_at, end_at, timezone, calendar_ids)
+        except HttpError as exc:
+            response_text = exc.content.decode("utf-8", errors="replace") if getattr(exc, "content", None) else None
+            raise CalendarAPIError(
+                operation="freebusy_query",
+                message="Google Calendar free/busy query failed.",
+                status_code=getattr(exc.resp, "status", None),
+                response_text=response_text,
+            ) from exc
+        busy_windows: list[dict[str, Any]] = []
+        for calendar_id, calendar_data in response.get("calendars", {}).items():
+            busy = calendar_data.get("busy", [])
+            for item in busy:
+                busy_windows.append(
+                    {
+                        "calendar_id": calendar_id,
+                        "start": datetime.fromisoformat(item["start"].replace("Z", "+00:00")),
+                        "end": datetime.fromisoformat(item["end"].replace("Z", "+00:00")),
+                    }
+                )
+        return busy_windows
 
     @property
     def _credentials_ready(self) -> bool:
@@ -98,9 +158,15 @@ class GoogleCalendarService:
         self._service = build("calendar", "v3", credentials=credentials, cache_discovery=False)
         return self._service
 
-    def _freebusy_query(self, start_at: datetime, end_at: datetime, timezone: str) -> dict[str, Any]:
+    def _freebusy_query(
+        self,
+        start_at: datetime,
+        end_at: datetime,
+        timezone: str,
+        calendar_ids: list[str],
+    ) -> dict[str, Any]:
         if not self._credentials_ready:
-            return {"calendars": {self.settings.google_calendar_id: {"busy": []}}}
+            return {"calendars": {calendar_id: {"busy": []} for calendar_id in calendar_ids}}
         service = self._build_service()
         return (
             service.freebusy()
@@ -109,7 +175,7 @@ class GoogleCalendarService:
                     "timeMin": start_at.isoformat(),
                     "timeMax": end_at.isoformat(),
                     "timeZone": timezone,
-                    "items": [{"id": self.settings.google_calendar_id}],
+                    "items": [{"id": calendar_id} for calendar_id in calendar_ids],
                 }
             )
             .execute()

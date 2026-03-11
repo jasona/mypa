@@ -120,6 +120,7 @@ class ClaudeAgent:
                         "end_at": {"type": "string", "format": "date-time"},
                         "duration_minutes": {"type": "integer"},
                         "timezone": {"type": "string"},
+                        "calendar_ids": {"type": "array", "items": {"type": "string"}},
                     },
                     "required": ["start_at", "end_at", "timezone"],
                     "additionalProperties": False,

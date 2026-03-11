@@ -14,12 +14,26 @@ class AvailabilityRequest(BaseModel):
     end_at: datetime
     duration_minutes: int = Field(default=30, ge=15)
     timezone: str
+    calendar_ids: list[str] = Field(default_factory=list)
 
 
 class AvailabilitySlot(BaseModel):
     start_at: datetime
     end_at: datetime
     timezone: str
+
+
+class BusyWindow(BaseModel):
+    calendar_id: str
+    start_at: datetime
+    end_at: datetime
+    timezone: str
+
+
+class AvailabilityResult(BaseModel):
+    queried_calendar_ids: list[str] = Field(default_factory=list)
+    busy_windows: list[BusyWindow] = Field(default_factory=list)
+    slots: list[AvailabilitySlot] = Field(default_factory=list)
 
 
 class CalendarEventInput(BaseModel):

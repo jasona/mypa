@@ -1,6 +1,9 @@
 from datetime import datetime, timedelta
 
+import pytest
+
 from app.schemas.email import AgentMailEnvelope
+from app.integrations.calendar import CalendarAPIError
 from app.services.scheduler import SchedulerService
 
 
@@ -43,3 +46,34 @@ def test_summarize_email_trims_signature_content():
     summary = SchedulerService.summarize_email(envelope)
 
     assert summary == "This is a test. Can you reply yet?"
+
+
+@pytest.mark.asyncio
+async def test_handle_telegram_message_returns_friendly_calendar_error():
+    scheduler = SchedulerService.__new__(SchedulerService)
+    scheduler.settings = type("SettingsStub", (), {"app_timezone": "UTC"})()
+
+    class CalendarStub:
+        async def upcoming_context(self, days=14):
+            return []
+
+    class AgentStub:
+        async def run(self, **kwargs):
+            raise CalendarAPIError(operation="freebusy_query", message="failed", status_code=403)
+
+    scheduler.calendar = CalendarStub()
+    scheduler.agent = AgentStub()
+    scheduler._tool_handlers = lambda **kwargs: {}
+
+    from app.schemas.telegram import TelegramInboundMessage
+
+    reply = await scheduler.handle_telegram_message(
+        TelegramInboundMessage(
+            chat_id="123",
+            text="What is Jane's schedule today?",
+            message_id="1",
+            sent_at=datetime(2026, 3, 10, 12, 0, 0),
+        )
+    )
+
+    assert "I couldn't check that calendar right now." in reply
