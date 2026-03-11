@@ -93,6 +93,31 @@ async def test_thread_calendar_event_bindings_round_trip(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_security_audit_events_round_trip(tmp_path):
+    store = SQLiteStore(tmp_path / "agent.db")
+    await store.initialize()
+
+    await store.add_security_audit_event(
+        source="telegram",
+        actor="123",
+        action="unauthorized_access",
+        decision="denied",
+        reason="chat_not_allowlisted",
+        target="123",
+        metadata_json='{"chat_type":"private"}',
+    )
+
+    recent = await store.count_recent_security_audit_events(
+        source="telegram",
+        action="unauthorized_access",
+        target="123",
+        since_iso="2000-01-01T00:00:00+00:00",
+    )
+
+    assert recent == 1
+
+
+@pytest.mark.asyncio
 async def test_thread_state_falls_back_to_sqlite_when_redis_fails(tmp_path):
     class FailingRedis:
         def __init__(self):

@@ -10,6 +10,7 @@ from app.db.models import (
     PendingEmailApprovalRecord,
     ProposalRecord,
     ProposalStatus,
+    SecurityAuditRecord,
     ThreadRecord,
     ThreadCalendarEventRecord,
     ThreadStatus,
@@ -107,6 +108,21 @@ class SQLiteStore:
                     event_id TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     PRIMARY KEY (thread_id, event_id)
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS security_audit_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source TEXT NOT NULL,
+                    actor TEXT,
+                    action TEXT NOT NULL,
+                    decision TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    target TEXT,
+                    metadata_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
                 )
                 """
             )
@@ -357,6 +373,40 @@ class SQLiteStore:
             await db.commit()
         return cursor.rowcount if cursor.rowcount is not None else 0
 
+    async def list_pending_email_approvals_by_thread(self, thread_id: str) -> list[PendingEmailApprovalRecord]:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                """
+                SELECT id, sender, event_id, thread_id, subject, envelope_json, created_at
+                FROM pending_email_approvals
+                WHERE thread_id = ?
+                ORDER BY created_at ASC
+                """,
+                (thread_id,),
+            )
+            rows = await cursor.fetchall()
+        return [
+            PendingEmailApprovalRecord(
+                id=row[0],
+                sender=row[1],
+                event_id=row[2],
+                thread_id=row[3],
+                subject=row[4],
+                envelope_json=row[5],
+                created_at=datetime.fromisoformat(row[6]),
+            )
+            for row in rows
+        ]
+
+    async def delete_pending_email_approvals_for_thread(self, thread_id: str) -> int:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                "DELETE FROM pending_email_approvals WHERE thread_id = ?",
+                (thread_id,),
+            )
+            await db.commit()
+        return cursor.rowcount if cursor.rowcount is not None else 0
+
     async def bind_thread_calendar_event(self, thread_id: str, event_id: str) -> ThreadCalendarEventRecord:
         record = ThreadCalendarEventRecord(thread_id=thread_id, event_id=event_id)
         async with aiosqlite.connect(self.path) as db:
@@ -405,6 +455,68 @@ class SQLiteStore:
                 (thread_id, event_id),
             )
             await db.commit()
+
+    async def add_security_audit_event(
+        self,
+        *,
+        source: str,
+        action: str,
+        decision: str,
+        reason: str,
+        actor: str | None = None,
+        target: str | None = None,
+        metadata_json: str = "{}",
+    ) -> SecurityAuditRecord:
+        record = SecurityAuditRecord(
+            source=source,
+            actor=actor,
+            action=action,
+            decision=decision,
+            reason=reason,
+            target=target,
+            metadata_json=metadata_json,
+        )
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                """
+                INSERT INTO security_audit_events (
+                    source, actor, action, decision, reason, target, metadata_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.source,
+                    record.actor,
+                    record.action,
+                    record.decision,
+                    record.reason,
+                    record.target,
+                    record.metadata_json,
+                    record.created_at.isoformat(),
+                ),
+            )
+            await db.commit()
+        record.id = cursor.lastrowid
+        return record
+
+    async def count_recent_security_audit_events(
+        self,
+        *,
+        source: str,
+        action: str,
+        target: str | None,
+        since_iso: str,
+    ) -> int:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                """
+                SELECT COUNT(*)
+                FROM security_audit_events
+                WHERE source = ? AND action = ? AND ((target = ?) OR (target IS NULL AND ? IS NULL)) AND created_at >= ?
+                """,
+                (source, action, target, target, since_iso),
+            )
+            row = await cursor.fetchone()
+        return int(row[0]) if row else 0
 
     @staticmethod
     def dump_participants(participants: list[str]) -> str:

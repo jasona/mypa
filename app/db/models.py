@@ -70,3 +70,15 @@ class ThreadCalendarEventRecord(BaseModel):
     thread_id: str
     event_id: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class SecurityAuditRecord(BaseModel):
+    id: int | None = None
+    source: str
+    actor: str | None = None
+    action: str
+    decision: str
+    reason: str
+    target: str | None = None
+    metadata_json: str = "{}"
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

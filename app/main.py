@@ -52,6 +52,18 @@ async def lifespan(app: FastAPI):
         assert scheduler is not None
         return await scheduler.reject_sender(sender)
 
+    async def on_trust_thread(thread_id: str):
+        assert scheduler is not None
+        return await scheduler.approve_thread(thread_id)
+
+    async def on_reject_thread(thread_id: str):
+        assert scheduler is not None
+        return await scheduler.reject_thread(thread_id)
+
+    async def on_unauthorized_access(chat_id: str, chat_type: str):
+        assert scheduler is not None
+        await scheduler.handle_unauthorized_telegram_access(chat_id, chat_type)
+
     telegram_service = TelegramBotService(
         token=settings.telegram_bot_token,
         default_chat_id=settings.telegram_admin_chat_id,
@@ -60,6 +72,9 @@ async def lifespan(app: FastAPI):
         on_message=on_telegram_message,
         on_trust_sender=on_trust_sender,
         on_reject_sender=on_reject_sender,
+        on_trust_thread=on_trust_thread,
+        on_reject_thread=on_reject_thread,
+        on_unauthorized_access=on_unauthorized_access,
     )
     scheduler = SchedulerService(
         settings=settings,
@@ -142,6 +157,7 @@ async def process_agentmail_event(scheduler, sqlite_store, telegram, settings, p
         if envelope.event_type == "message.received":
             if await scheduler.thread_state.is_processed(envelope.event_id):
                 logger.info("Ignoring duplicate AgentMail event: %s", envelope.event_id)
+                await scheduler.handle_duplicate_agentmail_event(envelope.event_id)
                 return
             await scheduler.notify_email_received(envelope)
             await scheduler.handle_email(envelope)

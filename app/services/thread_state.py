@@ -106,6 +106,12 @@ class ThreadStateStore:
     async def delete_pending_email_approvals_for_sender(self, sender: str) -> int:
         return await self.sqlite_store.delete_pending_email_approvals_for_sender(sender)
 
+    async def list_pending_email_approvals_by_thread(self, thread_id: str):
+        return await self.sqlite_store.list_pending_email_approvals_by_thread(thread_id)
+
+    async def delete_pending_email_approvals_for_thread(self, thread_id: str) -> int:
+        return await self.sqlite_store.delete_pending_email_approvals_for_thread(thread_id)
+
     async def bind_thread_calendar_event(self, thread_id: str, event_id: str) -> None:
         await self.sqlite_store.bind_thread_calendar_event(thread_id, event_id)
 
@@ -117,6 +123,42 @@ class ThreadStateStore:
 
     async def unbind_thread_calendar_event(self, thread_id: str, event_id: str) -> None:
         await self.sqlite_store.unbind_thread_calendar_event(thread_id, event_id)
+
+    async def add_security_audit_event(
+        self,
+        *,
+        source: str,
+        action: str,
+        decision: str,
+        reason: str,
+        actor: str | None = None,
+        target: str | None = None,
+        metadata_json: str = "{}",
+    ) -> None:
+        await self.sqlite_store.add_security_audit_event(
+            source=source,
+            action=action,
+            decision=decision,
+            reason=reason,
+            actor=actor,
+            target=target,
+            metadata_json=metadata_json,
+        )
+
+    async def count_recent_security_audit_events(
+        self,
+        *,
+        source: str,
+        action: str,
+        target: str | None,
+        since_iso: str,
+    ) -> int:
+        return await self.sqlite_store.count_recent_security_audit_events(
+            source=source,
+            action=action,
+            target=target,
+            since_iso=since_iso,
+        )
 
     @staticmethod
     def _thread_key(thread_id: str) -> str:

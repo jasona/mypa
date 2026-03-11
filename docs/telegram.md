@@ -62,6 +62,16 @@ When email trust enforcement is enabled and an untrusted sender emails the agent
 
 - `/trust_sender sender@example.com`: trust the sender going forward and process any queued blocked emails from that sender
 - `/reject_sender sender@example.com`: reject and clear queued blocked emails from that sender
+- `/trust_thread thread-id`: approve a specific email thread for automation and process queued blocked emails on that thread
+- `/reject_thread thread-id`: reject and clear queued blocked emails on that thread
+
+## Security Alerts
+
+The bot also sends admin-facing alerts for:
+
+- unauthorized Telegram access attempts
+- repeated duplicate AgentMail webhook deliveries
+- blocked external email attempts to update or delete unbound calendar events
 
 ## Common Issues
 

@@ -251,6 +251,7 @@ async def test_handle_email_blocks_untrusted_sender_when_policy_enabled():
         def __init__(self):
             self.marked = None
             self.queued = None
+            self.audit = []
 
         async def is_processed(self, event_id):
             return False
@@ -269,6 +270,9 @@ async def test_handle_email_blocks_untrusted_sender_when_policy_enabled():
 
         async def mark_processed(self, event_id, source):
             self.marked = (event_id, source)
+
+        async def add_security_audit_event(self, **kwargs):
+            self.audit.append(kwargs)
 
     class TelegramStub:
         def __init__(self):
@@ -431,6 +435,7 @@ async def test_approve_sender_trusts_sender_and_processes_pending_emails():
     class ThreadStateStub:
         def __init__(self):
             self.trusted = []
+            self.audit = []
 
         async def add_trusted_sender(self, sender):
             self.trusted.append(sender)
@@ -464,6 +469,9 @@ async def test_approve_sender_trusts_sender_and_processes_pending_emails():
         async def delete_pending_email_approval(self, approval_id):
             processed.append(("deleted", approval_id))
 
+        async def add_security_audit_event(self, **kwargs):
+            self.audit.append(kwargs)
+
     async def fake_process(envelope, *, skip_processed_check=False):
         processed.append((envelope.sender, skip_processed_check))
         return {"status": "processed"}
@@ -480,6 +488,129 @@ async def test_approve_sender_trusts_sender_and_processes_pending_emails():
 
 
 @pytest.mark.asyncio
+async def test_approve_thread_processes_pending_thread_emails():
+    scheduler = SchedulerService.__new__(SchedulerService)
+    scheduler.settings = type("SettingsStub", (), {})()
+
+    processed = []
+
+    class ThreadRecordStub:
+        thread_id = "thread-9"
+        subject = "Subject"
+        participants_json = '["a@example.com"]'
+        status = ThreadStatus.NEW_REQUEST
+        approved_for_automation = False
+        summary = None
+        last_message_id = "msg-1"
+        last_decision = None
+
+    class ThreadStateStub:
+        def __init__(self):
+            self.upserts = []
+            self.audit = []
+
+        async def get_thread(self, thread_id):
+            return ThreadRecordStub()
+
+        async def upsert_thread(self, **kwargs):
+            self.upserts.append(kwargs)
+
+        async def list_pending_email_approvals_by_thread(self, thread_id):
+            envelope = AgentMailEnvelope(
+                event_id="evt-9",
+                event_type="message.received",
+                inbox_id="inbox-1",
+                thread_id=thread_id,
+                message_id="msg-9",
+                subject="Thread approval",
+                sender="outside@example.com",
+                to=["assistant@example.agentmail.to"],
+                cc=[],
+                preview="hello",
+                body_text="hello",
+                received_at=datetime(2026, 3, 10, 13, 0, 0, tzinfo=UTC),
+            )
+            return [type("ApprovalStub", (), {"id": 2, "envelope_json": envelope.model_dump_json()})()]
+
+        async def delete_pending_email_approval(self, approval_id):
+            processed.append(("deleted", approval_id))
+
+        async def add_security_audit_event(self, **kwargs):
+            self.audit.append(kwargs)
+
+    async def fake_process(envelope, *, skip_processed_check=False):
+        processed.append((envelope.thread_id, skip_processed_check))
+        return {"status": "processed"}
+
+    scheduler.thread_state = ThreadStateStub()
+    scheduler._process_email_envelope = fake_process
+
+    reply = await scheduler.approve_thread("thread-9")
+
+    assert scheduler.thread_state.upserts[0]["approved_for_automation"] is True
+    assert ("thread-9", True) in processed
+    assert ("deleted", 2) in processed
+    assert "Thread approved for automation: thread-9." in reply
+
+
+@pytest.mark.asyncio
+async def test_handle_duplicate_agentmail_event_alerts_after_threshold():
+    scheduler = SchedulerService.__new__(SchedulerService)
+
+    class ThreadStateStub:
+        def __init__(self):
+            self.audit = []
+
+        async def add_security_audit_event(self, **kwargs):
+            self.audit.append(kwargs)
+
+        async def count_recent_security_audit_events(self, **kwargs):
+            return 3
+
+    class TelegramStub:
+        def __init__(self):
+            self.messages = []
+
+        async def send_message(self, text, chat_id=None):
+            self.messages.append(text)
+
+    scheduler.thread_state = ThreadStateStub()
+    scheduler.telegram = TelegramStub()
+
+    await scheduler.handle_duplicate_agentmail_event("evt-1")
+
+    assert scheduler.thread_state.audit[0]["action"] == "duplicate_event"
+    assert "AgentMail replay burst detected" in scheduler.telegram.messages[0]
+
+
+@pytest.mark.asyncio
+async def test_handle_unauthorized_telegram_access_records_and_alerts():
+    scheduler = SchedulerService.__new__(SchedulerService)
+
+    class ThreadStateStub:
+        def __init__(self):
+            self.audit = []
+
+        async def add_security_audit_event(self, **kwargs):
+            self.audit.append(kwargs)
+
+    class TelegramStub:
+        def __init__(self):
+            self.messages = []
+
+        async def send_message(self, text, chat_id=None):
+            self.messages.append(text)
+
+    scheduler.thread_state = ThreadStateStub()
+    scheduler.telegram = TelegramStub()
+
+    await scheduler.handle_unauthorized_telegram_access("999", "private")
+
+    assert scheduler.thread_state.audit[0]["reason"] == "chat_not_allowlisted"
+    assert "unauthorized Telegram access blocked" in scheduler.telegram.messages[0]
+
+
+@pytest.mark.asyncio
 async def test_external_email_calendar_mutations_are_limited_to_bound_events():
     scheduler = SchedulerService.__new__(SchedulerService)
 
@@ -492,7 +623,15 @@ async def test_external_email_calendar_mutations_are_limited_to_bound_events():
             return {"status": "updated", "event_id": event.event_id}
 
     scheduler.calendar = CalendarStub()
-    scheduler.thread_state = type("ThreadStateStub", (), {"unbind_thread_calendar_event": staticmethod(_async_return)})()
+    scheduler.telegram = type("TelegramStub", (), {"send_message": staticmethod(_async_return)})()
+    scheduler.thread_state = type(
+        "ThreadStateStub",
+        (),
+        {
+            "unbind_thread_calendar_event": staticmethod(_async_return),
+            "add_security_audit_event": staticmethod(lambda **kwargs: _async_return(None)),
+        },
+    )()
 
     envelope = AgentMailEnvelope(
         event_id="evt-mail",

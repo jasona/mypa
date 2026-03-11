@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -77,6 +77,14 @@ class SchedulerService:
             return "Usage: /trust_sender sender@example.com"
 
         await self.thread_state.add_trusted_sender(normalized_sender)
+        await self._record_audit(
+            source="telegram",
+            actor="admin",
+            action="approve_sender",
+            decision="allowed",
+            reason="admin_approved_sender",
+            target=normalized_sender,
+        )
         pending = await self.thread_state.list_pending_email_approvals(normalized_sender)
         processed = 0
         failed = 0
@@ -104,7 +112,76 @@ class SchedulerService:
         if not normalized_sender:
             return "Usage: /reject_sender sender@example.com"
         removed = await self.thread_state.delete_pending_email_approvals_for_sender(normalized_sender)
+        await self._record_audit(
+            source="telegram",
+            actor="admin",
+            action="reject_sender",
+            decision="allowed",
+            reason="admin_rejected_sender",
+            target=normalized_sender,
+            metadata={"removed_pending_count": removed},
+        )
         return f"Rejected pending email automation for {normalized_sender}. Removed {removed} queued email(s)."
+
+    async def approve_thread(self, thread_id: str) -> str:
+        normalized_thread_id = thread_id.strip()
+        if not normalized_thread_id:
+            return "Usage: /trust_thread thread-id"
+        current = await self.thread_state.get_thread(normalized_thread_id)
+        if not current:
+            return f"Thread not found: {normalized_thread_id}"
+        await self.thread_state.upsert_thread(
+            thread_id=current.thread_id,
+            subject=current.subject or "",
+            participants=SQLiteStore.load_participants(current.participants_json),
+            status=current.status,
+            approved_for_automation=True,
+            summary=current.summary,
+            last_message_id=current.last_message_id,
+            last_decision=current.last_decision,
+        )
+        pending = await self.thread_state.list_pending_email_approvals_by_thread(normalized_thread_id)
+        processed = 0
+        failed = 0
+        for approval in pending:
+            try:
+                envelope = AgentMailEnvelope.model_validate_json(approval.envelope_json)
+                await self._process_email_envelope(envelope, skip_processed_check=True)
+                await self.thread_state.delete_pending_email_approval(approval.id)
+                processed += 1
+            except Exception:
+                logger.exception("Failed to process queued email for approved thread %s", normalized_thread_id)
+                failed += 1
+        await self._record_audit(
+            source="telegram",
+            actor="admin",
+            action="approve_thread",
+            decision="allowed",
+            reason="admin_approved_thread",
+            target=normalized_thread_id,
+            metadata={"processed": processed, "failed": failed},
+        )
+        details = [f"Thread approved for automation: {normalized_thread_id}."]
+        details.append(f"Processed {processed} queued email(s).")
+        if failed:
+            details.append(f"{failed} queued email(s) still need attention.")
+        return " ".join(details)
+
+    async def reject_thread(self, thread_id: str) -> str:
+        normalized_thread_id = thread_id.strip()
+        if not normalized_thread_id:
+            return "Usage: /reject_thread thread-id"
+        removed = await self.thread_state.delete_pending_email_approvals_for_thread(normalized_thread_id)
+        await self._record_audit(
+            source="telegram",
+            actor="admin",
+            action="reject_thread",
+            decision="allowed",
+            reason="admin_rejected_thread",
+            target=normalized_thread_id,
+            metadata={"removed_pending_count": removed},
+        )
+        return f"Rejected pending email automation for thread {normalized_thread_id}. Removed {removed} queued email(s)."
 
     async def _process_email_envelope(
         self,
@@ -138,6 +215,15 @@ class SchedulerService:
                 envelope_json=envelope.model_dump_json(),
             )
             await self.thread_state.mark_processed(envelope.event_id, "agentmail")
+            await self._record_audit(
+                source="agentmail",
+                actor=envelope.sender,
+                action="email_automation_gate",
+                decision="denied",
+                reason="thread_not_trusted_for_automation",
+                target=envelope.thread_id,
+                metadata={"event_id": envelope.event_id, "subject": envelope.subject},
+            )
             await self.telegram.send_message(
                 self._format_untrusted_email_notice(envelope, thread_approved_for_automation)
             )
@@ -318,6 +404,21 @@ class SchedulerService:
         async def update_event(payload: dict) -> dict:
             event = CalendarEventUpdate.model_validate(payload)
             if envelope and restrict_calendar_mutations_to_thread_events and event.event_id not in bound_event_ids:
+                await self._record_audit(
+                    source="agentmail",
+                    actor=envelope.sender,
+                    action="update_event",
+                    decision="denied",
+                    reason="event_not_bound_to_thread",
+                    target=event.event_id,
+                    metadata={"thread_id": envelope.thread_id},
+                )
+                await self.telegram.send_message(
+                    "Security alert: blocked external email calendar update\n"
+                    f"From: {envelope.sender}\n"
+                    f"Thread: {envelope.thread_id}\n"
+                    f"Event ID: {event.event_id}"
+                )
                 return {
                     "status": "blocked",
                     "reason": "event_not_bound_to_thread",
@@ -329,6 +430,21 @@ class SchedulerService:
         async def delete_event(payload: dict) -> dict:
             event_id = payload["event_id"]
             if envelope and restrict_calendar_mutations_to_thread_events and event_id not in bound_event_ids:
+                await self._record_audit(
+                    source="agentmail",
+                    actor=envelope.sender,
+                    action="delete_event",
+                    decision="denied",
+                    reason="event_not_bound_to_thread",
+                    target=event_id,
+                    metadata={"thread_id": envelope.thread_id},
+                )
+                await self.telegram.send_message(
+                    "Security alert: blocked external email calendar deletion\n"
+                    f"From: {envelope.sender}\n"
+                    f"Thread: {envelope.thread_id}\n"
+                    f"Event ID: {event_id}"
+                )
                 return {
                     "status": "blocked",
                     "reason": "event_not_bound_to_thread",
@@ -475,8 +591,10 @@ class SchedulerService:
         return (
             "Email automation blocked for untrusted sender\n"
             f"From: {envelope.sender}\n"
+            f"Thread: {envelope.thread_id}\n"
             f"Subject: {subject}\n"
-            f"Status: {status}"
+            f"Status: {status}\n"
+            f"Optional thread approval: /trust_thread {envelope.thread_id}"
         )
 
     @staticmethod
@@ -526,3 +644,63 @@ class SchedulerService:
                 break
             kept_lines.append(line)
         return "\n".join(kept_lines).strip()
+
+    async def _record_audit(
+        self,
+        *,
+        source: str,
+        action: str,
+        decision: str,
+        reason: str,
+        actor: str | None = None,
+        target: str | None = None,
+        metadata: dict | None = None,
+    ) -> None:
+        await self.thread_state.add_security_audit_event(
+            source=source,
+            actor=actor,
+            action=action,
+            decision=decision,
+            reason=reason,
+            target=target,
+            metadata_json=json.dumps(metadata or {}, default=str),
+        )
+
+    async def handle_duplicate_agentmail_event(self, event_id: str) -> None:
+        await self._record_audit(
+            source="agentmail",
+            actor="webhook",
+            action="duplicate_event",
+            decision="denied",
+            reason="duplicate_agentmail_event",
+            target=event_id,
+        )
+        since = (datetime.now(UTC) - timedelta(minutes=10)).isoformat()
+        recent_count = await self.thread_state.count_recent_security_audit_events(
+            source="agentmail",
+            action="duplicate_event",
+            target=event_id,
+            since_iso=since,
+        )
+        if recent_count >= 3:
+            await self.telegram.send_message(
+                "Security alert: AgentMail replay burst detected\n"
+                f"Event ID: {event_id}\n"
+                f"Recent duplicates: {recent_count}"
+            )
+
+    async def handle_unauthorized_telegram_access(self, chat_id: str, chat_type: str) -> None:
+        await self._record_audit(
+            source="telegram",
+            actor=chat_id,
+            action="unauthorized_access",
+            decision="denied",
+            reason="chat_not_allowlisted",
+            target=chat_id,
+            metadata={"chat_type": chat_type},
+        )
+        await self.telegram.send_message(
+            "Security alert: unauthorized Telegram access blocked\n"
+            f"Chat ID: {chat_id}\n"
+            f"Chat type: {chat_type}"
+        )

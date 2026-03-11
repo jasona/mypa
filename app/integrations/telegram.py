@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 TelegramCallback = Callable[[TelegramInboundMessage], Awaitable[str | None]]
 TelegramAdminCallback = Callable[[str], Awaitable[str | None]]
+TelegramSecurityCallback = Callable[[str, str], Awaitable[None]]
 
 
 class TelegramBotService:
@@ -25,6 +26,9 @@ class TelegramBotService:
         allow_group_chats: bool = False,
         on_trust_sender: TelegramAdminCallback | None = None,
         on_reject_sender: TelegramAdminCallback | None = None,
+        on_trust_thread: TelegramAdminCallback | None = None,
+        on_reject_thread: TelegramAdminCallback | None = None,
+        on_unauthorized_access: TelegramSecurityCallback | None = None,
     ):
         self.token = token
         self.default_chat_id = default_chat_id
@@ -33,6 +37,9 @@ class TelegramBotService:
         self.allow_group_chats = allow_group_chats
         self.on_trust_sender = on_trust_sender
         self.on_reject_sender = on_reject_sender
+        self.on_trust_thread = on_trust_thread
+        self.on_reject_thread = on_reject_thread
+        self.on_unauthorized_access = on_unauthorized_access
         self.application: Application | None = None
 
     @property
@@ -49,6 +56,8 @@ class TelegramBotService:
         self.application.add_handler(CommandHandler("whoami", self._handle_whoami))
         self.application.add_handler(CommandHandler("trust_sender", self._handle_trust_sender))
         self.application.add_handler(CommandHandler("reject_sender", self._handle_reject_sender))
+        self.application.add_handler(CommandHandler("trust_thread", self._handle_trust_thread))
+        self.application.add_handler(CommandHandler("reject_thread", self._handle_reject_thread))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_text))
         await self.application.initialize()
         await self.application.start()
@@ -111,6 +120,12 @@ class TelegramBotService:
     async def _handle_reject_sender(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await self._handle_sender_command(update, context, self.on_reject_sender, "reject_sender")
 
+    async def _handle_trust_thread(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        await self._handle_sender_command(update, context, self.on_trust_thread, "trust_thread")
+
+    async def _handle_reject_thread(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        await self._handle_sender_command(update, context, self.on_reject_thread, "reject_thread")
+
     async def _handle_sender_command(
         self,
         update: Update,
@@ -148,6 +163,8 @@ class TelegramBotService:
         if self.is_inbound_chat_allowed(chat_id, chat_type):
             return True
         logger.warning("Unauthorized Telegram chat blocked: id=%s type=%s", chat_id, chat_type)
+        if self.on_unauthorized_access:
+            await self.on_unauthorized_access(chat_id, chat_type)
         if update.effective_message and chat_type == "private":
             await update.effective_message.reply_text("This bot is not authorized for this chat.")
         return False
