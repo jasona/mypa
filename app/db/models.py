@@ -28,6 +28,7 @@ class ThreadRecord(BaseModel):
     subject: str | None = None
     participants_json: str = "[]"
     status: ThreadStatus = ThreadStatus.NEW_REQUEST
+    approved_for_automation: bool = False
     summary: str | None = None
     last_message_id: str | None = None
     last_decision: str | None = None
@@ -48,3 +49,18 @@ class ProcessedEventRecord(BaseModel):
     event_id: str
     source: str
     processed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class TrustedSenderRecord(BaseModel):
+    sender: str
+    added_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class PendingEmailApprovalRecord(BaseModel):
+    id: int
+    sender: str
+    event_id: str
+    thread_id: str
+    subject: str | None = None
+    envelope_json: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

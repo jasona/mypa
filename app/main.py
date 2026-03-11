@@ -44,12 +44,22 @@ async def lifespan(app: FastAPI):
         assert scheduler is not None
         return await scheduler.handle_telegram_message(message)
 
+    async def on_trust_sender(sender: str):
+        assert scheduler is not None
+        return await scheduler.approve_sender(sender)
+
+    async def on_reject_sender(sender: str):
+        assert scheduler is not None
+        return await scheduler.reject_sender(sender)
+
     telegram_service = TelegramBotService(
         token=settings.telegram_bot_token,
         default_chat_id=settings.telegram_admin_chat_id,
         allowed_chat_ids=settings.telegram_allowed_chat_ids,
         allow_group_chats=settings.telegram_allow_group_chats,
         on_message=on_telegram_message,
+        on_trust_sender=on_trust_sender,
+        on_reject_sender=on_reject_sender,
     )
     scheduler = SchedulerService(
         settings=settings,

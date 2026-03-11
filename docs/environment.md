@@ -47,6 +47,9 @@ If `TELEGRAM_BOT_TOKEN` is blank, Telegram polling is disabled.
 - `AGENTMAIL_API_BASE`: defaults to `https://api.agentmail.to`
 - `AGENTMAIL_WEBHOOK_SECRET`: used to validate the `X-AgentMail-Signature` header
 - `AGENTMAIL_INBOX_ADDRESS`: your agent inbox address
+- `EMAIL_TRUSTED_SENDERS`: optional comma-separated allowlist of exact sender email addresses that are allowed to drive email automation. Admin-approved senders are also stored in SQLite and automatically included.
+- `EMAIL_TRUSTED_DOMAINS`: optional comma-separated allowlist of sender domains that are allowed to drive email automation
+- `EMAIL_REQUIRE_TRUST_FOR_AUTOMATION`: defaults to `false`. When `true`, new threads must begin with a trusted sender or trusted domain before they can use autonomous email replies or calendar mutations. Once a thread is approved, outside participants on that same thread can continue the workflow
 
 If `AGENTMAIL_API_KEY` is blank, outbound email replies are simulated.
 

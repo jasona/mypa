@@ -6,7 +6,14 @@ from pathlib import Path
 
 import aiosqlite
 
-from app.db.models import ProposalRecord, ProposalStatus, ThreadRecord, ThreadStatus
+from app.db.models import (
+    PendingEmailApprovalRecord,
+    ProposalRecord,
+    ProposalStatus,
+    ThreadRecord,
+    ThreadStatus,
+    TrustedSenderRecord,
+)
 
 
 class SQLiteStore:
@@ -23,6 +30,7 @@ class SQLiteStore:
                     subject TEXT,
                     participants_json TEXT NOT NULL,
                     status TEXT NOT NULL,
+                    approved_for_automation INTEGER NOT NULL DEFAULT 0,
                     summary TEXT,
                     last_message_id TEXT,
                     last_decision TEXT,
@@ -30,6 +38,12 @@ class SQLiteStore:
                 )
                 """
             )
+            cursor = await db.execute("PRAGMA table_info(threads)")
+            thread_columns = {row[1] for row in await cursor.fetchall()}
+            if "approved_for_automation" not in thread_columns:
+                await db.execute(
+                    "ALTER TABLE threads ADD COLUMN approved_for_automation INTEGER NOT NULL DEFAULT 0"
+                )
             await db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS proposals (
@@ -64,13 +78,34 @@ class SQLiteStore:
                 )
                 """
             )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS trusted_senders (
+                    sender TEXT PRIMARY KEY,
+                    added_at TEXT NOT NULL
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS pending_email_approvals (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    sender TEXT NOT NULL,
+                    event_id TEXT NOT NULL UNIQUE,
+                    thread_id TEXT NOT NULL,
+                    subject TEXT,
+                    envelope_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
             await db.commit()
 
     async def get_thread(self, thread_id: str) -> ThreadRecord | None:
         async with aiosqlite.connect(self.path) as db:
             cursor = await db.execute(
                 """
-                SELECT thread_id, subject, participants_json, status, summary, last_message_id, last_decision, updated_at
+                SELECT thread_id, subject, participants_json, status, approved_for_automation, summary, last_message_id, last_decision, updated_at
                 FROM threads
                 WHERE thread_id = ?
                 """,
@@ -84,10 +119,11 @@ class SQLiteStore:
             subject=row[1],
             participants_json=row[2],
             status=ThreadStatus(row[3]),
-            summary=row[4],
-            last_message_id=row[5],
-            last_decision=row[6],
-            updated_at=datetime.fromisoformat(row[7]),
+            approved_for_automation=bool(row[4]),
+            summary=row[5],
+            last_message_id=row[6],
+            last_decision=row[7],
+            updated_at=datetime.fromisoformat(row[8]),
         )
 
     async def upsert_thread(self, record: ThreadRecord) -> None:
@@ -95,12 +131,13 @@ class SQLiteStore:
             await db.execute(
                 """
                 INSERT INTO threads (
-                    thread_id, subject, participants_json, status, summary, last_message_id, last_decision, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    thread_id, subject, participants_json, status, approved_for_automation, summary, last_message_id, last_decision, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(thread_id) DO UPDATE SET
                     subject = excluded.subject,
                     participants_json = excluded.participants_json,
                     status = excluded.status,
+                    approved_for_automation = excluded.approved_for_automation,
                     summary = excluded.summary,
                     last_message_id = excluded.last_message_id,
                     last_decision = excluded.last_decision,
@@ -111,6 +148,7 @@ class SQLiteStore:
                     record.subject,
                     record.participants_json,
                     record.status.value,
+                    int(record.approved_for_automation),
                     record.summary,
                     record.last_message_id,
                     record.last_decision,
@@ -216,6 +254,97 @@ class SQLiteStore:
                 (source, event_id, payload_json, error, datetime.now(UTC).isoformat()),
             )
             await db.commit()
+
+    async def is_trusted_sender(self, sender: str) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                "SELECT 1 FROM trusted_senders WHERE sender = ?",
+                (sender.strip().lower(),),
+            )
+            row = await cursor.fetchone()
+        return row is not None
+
+    async def add_trusted_sender(self, sender: str) -> TrustedSenderRecord:
+        normalized_sender = sender.strip().lower()
+        record = TrustedSenderRecord(sender=normalized_sender)
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                """
+                INSERT INTO trusted_senders (sender, added_at)
+                VALUES (?, ?)
+                ON CONFLICT(sender) DO UPDATE SET
+                    added_at = excluded.added_at
+                """,
+                (record.sender, record.added_at.isoformat()),
+            )
+            await db.commit()
+        return record
+
+    async def queue_pending_email_approval(
+        self,
+        *,
+        sender: str,
+        event_id: str,
+        thread_id: str,
+        subject: str | None,
+        envelope_json: str,
+    ) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                """
+                INSERT OR IGNORE INTO pending_email_approvals (
+                    sender, event_id, thread_id, subject, envelope_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    sender.strip().lower(),
+                    event_id,
+                    thread_id,
+                    subject,
+                    envelope_json,
+                    datetime.now(UTC).isoformat(),
+                ),
+            )
+            await db.commit()
+
+    async def list_pending_email_approvals(self, sender: str) -> list[PendingEmailApprovalRecord]:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                """
+                SELECT id, sender, event_id, thread_id, subject, envelope_json, created_at
+                FROM pending_email_approvals
+                WHERE sender = ?
+                ORDER BY created_at ASC
+                """,
+                (sender.strip().lower(),),
+            )
+            rows = await cursor.fetchall()
+        return [
+            PendingEmailApprovalRecord(
+                id=row[0],
+                sender=row[1],
+                event_id=row[2],
+                thread_id=row[3],
+                subject=row[4],
+                envelope_json=row[5],
+                created_at=datetime.fromisoformat(row[6]),
+            )
+            for row in rows
+        ]
+
+    async def delete_pending_email_approval(self, approval_id: int) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("DELETE FROM pending_email_approvals WHERE id = ?", (approval_id,))
+            await db.commit()
+
+    async def delete_pending_email_approvals_for_sender(self, sender: str) -> int:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                "DELETE FROM pending_email_approvals WHERE sender = ?",
+                (sender.strip().lower(),),
+            )
+            await db.commit()
+        return cursor.rowcount if cursor.rowcount is not None else 0
 
     @staticmethod
     def dump_participants(participants: list[str]) -> str:

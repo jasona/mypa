@@ -56,6 +56,13 @@ Telegram uses long-polling in this project, so it does not need a public webhook
 4. Send a normal message.
 5. Confirm the bot responds through the Claude loop.
 
+## Admin Approval Commands
+
+When email trust enforcement is enabled and an untrusted sender emails the agent, the bot sends the admin a Telegram message with approval instructions.
+
+- `/trust_sender sender@example.com`: trust the sender going forward and process any queued blocked emails from that sender
+- `/reject_sender sender@example.com`: reject and clear queued blocked emails from that sender
+
 ## Common Issues
 
 - No responses at all: check `TELEGRAM_BOT_TOKEN`

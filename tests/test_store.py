@@ -19,6 +19,7 @@ async def test_thread_and_proposals_round_trip(tmp_path):
             subject="Scheduling",
             participants_json='["a@example.com"]',
             status=ThreadStatus.NEW_REQUEST,
+            approved_for_automation=True,
             summary="new request",
             last_message_id="msg-1",
             last_decision="created",
@@ -29,6 +30,7 @@ async def test_thread_and_proposals_round_trip(tmp_path):
     thread = await store.get_thread("thread-1")
     assert thread is not None
     assert thread.subject == "Scheduling"
+    assert thread.approved_for_automation is True
 
     proposal = ProposalRecord(
         proposal_id="proposal-1",
@@ -50,6 +52,30 @@ async def test_processed_events_are_idempotent(tmp_path):
     assert await store.is_event_processed("evt-1") is False
     await store.mark_event_processed("evt-1", "agentmail")
     assert await store.is_event_processed("evt-1") is True
+
+
+@pytest.mark.asyncio
+async def test_trusted_senders_and_pending_approvals_round_trip(tmp_path):
+    store = SQLiteStore(tmp_path / "agent.db")
+    await store.initialize()
+
+    assert await store.is_trusted_sender("person@example.com") is False
+    await store.add_trusted_sender("person@example.com")
+    assert await store.is_trusted_sender("person@example.com") is True
+
+    await store.queue_pending_email_approval(
+        sender="person@example.com",
+        event_id="evt-1",
+        thread_id="thread-1",
+        subject="Need approval",
+        envelope_json='{"event_id":"evt-1"}',
+    )
+    pending = await store.list_pending_email_approvals("person@example.com")
+    assert len(pending) == 1
+    assert pending[0].thread_id == "thread-1"
+
+    await store.delete_pending_email_approval(pending[0].id)
+    assert await store.list_pending_email_approvals("person@example.com") == []
 
 
 @pytest.mark.asyncio

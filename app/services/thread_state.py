@@ -35,6 +35,7 @@ class ThreadStateStore:
         subject: str,
         participants: list[str],
         status: ThreadStatus,
+        approved_for_automation: bool = False,
         summary: str | None = None,
         last_message_id: str | None = None,
         last_decision: str | None = None,
@@ -44,6 +45,7 @@ class ThreadStateStore:
             subject=subject,
             participants_json=json.dumps(participants),
             status=status,
+            approved_for_automation=approved_for_automation,
             summary=summary,
             last_message_id=last_message_id,
             last_decision=last_decision,
@@ -71,6 +73,38 @@ class ThreadStateStore:
 
     async def mark_processed(self, event_id: str, source: str) -> None:
         await self.sqlite_store.mark_event_processed(event_id, source)
+
+    async def is_trusted_sender(self, sender: str) -> bool:
+        return await self.sqlite_store.is_trusted_sender(sender)
+
+    async def add_trusted_sender(self, sender: str) -> None:
+        await self.sqlite_store.add_trusted_sender(sender)
+
+    async def queue_pending_email_approval(
+        self,
+        *,
+        sender: str,
+        event_id: str,
+        thread_id: str,
+        subject: str | None,
+        envelope_json: str,
+    ) -> None:
+        await self.sqlite_store.queue_pending_email_approval(
+            sender=sender,
+            event_id=event_id,
+            thread_id=thread_id,
+            subject=subject,
+            envelope_json=envelope_json,
+        )
+
+    async def list_pending_email_approvals(self, sender: str):
+        return await self.sqlite_store.list_pending_email_approvals(sender)
+
+    async def delete_pending_email_approval(self, approval_id: int) -> None:
+        await self.sqlite_store.delete_pending_email_approval(approval_id)
+
+    async def delete_pending_email_approvals_for_sender(self, sender: str) -> int:
+        return await self.sqlite_store.delete_pending_email_approvals_for_sender(sender)
 
     @staticmethod
     def _thread_key(thread_id: str) -> str:

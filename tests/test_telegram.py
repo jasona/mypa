@@ -21,6 +21,16 @@ def test_settings_parses_explicit_telegram_allowlist():
     assert settings.telegram_allowed_chat_ids == {"123456789", "987654321", "555"}
 
 
+def test_settings_parses_email_trust_lists():
+    settings = Settings(
+        EMAIL_TRUSTED_SENDERS="ceo@example.com, admin@example.com",
+        EMAIL_TRUSTED_DOMAINS="@partners.com, vendors.com",
+    )
+
+    assert settings.email_trusted_senders == {"ceo@example.com", "admin@example.com"}
+    assert settings.email_trusted_domains == {"partners.com", "vendors.com"}
+
+
 def test_telegram_service_only_allows_private_authorized_chats_by_default():
     service = TelegramBotService(
         token=None,

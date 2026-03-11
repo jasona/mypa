@@ -68,24 +68,91 @@ class SchedulerService:
             return f"I couldn't check that calendar right now.{suffix}"
 
     async def handle_email(self, envelope: AgentMailEnvelope) -> dict:
-        if await self.thread_state.is_processed(envelope.event_id):
+        return await self._process_email_envelope(envelope)
+
+    async def approve_sender(self, sender: str) -> str:
+        normalized_sender = sender.strip().lower()
+        if not normalized_sender:
+            return "Usage: /trust_sender sender@example.com"
+
+        await self.thread_state.add_trusted_sender(normalized_sender)
+        pending = await self.thread_state.list_pending_email_approvals(normalized_sender)
+        processed = 0
+        failed = 0
+        for approval in pending:
+            try:
+                envelope = AgentMailEnvelope.model_validate_json(approval.envelope_json)
+                await self._process_email_envelope(envelope, skip_processed_check=True)
+                await self.thread_state.delete_pending_email_approval(approval.id)
+                processed += 1
+            except Exception:
+                logger.exception("Failed to process queued email for approved sender %s", normalized_sender)
+                failed += 1
+
+        details = [f"Trusted sender added: {normalized_sender}."]
+        if pending:
+            details.append(f"Processed {processed} queued email(s).")
+        else:
+            details.append("No queued emails were waiting.")
+        if failed:
+            details.append(f"{failed} queued email(s) still need attention.")
+        return " ".join(details)
+
+    async def reject_sender(self, sender: str) -> str:
+        normalized_sender = sender.strip().lower()
+        if not normalized_sender:
+            return "Usage: /reject_sender sender@example.com"
+        removed = await self.thread_state.delete_pending_email_approvals_for_sender(normalized_sender)
+        return f"Rejected pending email automation for {normalized_sender}. Removed {removed} queued email(s)."
+
+    async def _process_email_envelope(
+        self,
+        envelope: AgentMailEnvelope,
+        *,
+        skip_processed_check: bool = False,
+    ) -> dict:
+        if not skip_processed_check and await self.thread_state.is_processed(envelope.event_id):
             return {"status": "ignored", "reason": "duplicate_event"}
 
         participants = sorted({envelope.sender, *envelope.to, *envelope.cc})
+        sender_trusted = await self._is_email_sender_trusted(envelope.sender)
         existing = await self.thread_state.get_thread(envelope.thread_id)
+        thread_approved_for_automation = (existing.approved_for_automation if existing else False) or sender_trusted
         thread = await self.thread_state.upsert_thread(
             thread_id=envelope.thread_id,
             subject=envelope.subject,
             participants=participants,
             status=existing.status if existing else ThreadStatus.NEW_REQUEST,
+            approved_for_automation=thread_approved_for_automation,
             summary=existing.summary if existing else None,
             last_message_id=envelope.message_id,
             last_decision=existing.last_decision if existing else None,
         )
+        if self.settings.email_require_trust_for_automation and not thread_approved_for_automation:
+            await self.thread_state.queue_pending_email_approval(
+                sender=envelope.sender,
+                event_id=envelope.event_id,
+                thread_id=envelope.thread_id,
+                subject=envelope.subject,
+                envelope_json=envelope.model_dump_json(),
+            )
+            await self.thread_state.mark_processed(envelope.event_id, "agentmail")
+            await self.telegram.send_message(
+                self._format_untrusted_email_notice(envelope, thread_approved_for_automation)
+            )
+            return {
+                "status": "blocked",
+                "reason": "untrusted_thread",
+                "sender": envelope.sender,
+                "thread_id": envelope.thread_id,
+            }
 
         active_proposals = await self.thread_state.list_active_proposals(envelope.thread_id)
         extra_context = {
             **self._runtime_context(envelope.received_at),
+            "email_automation_trust_enforced": self.settings.email_require_trust_for_automation,
+            "sender_trusted": sender_trusted,
+            "thread_approved_for_automation": thread_approved_for_automation,
             "thread": self._serialize_thread(thread),
             "current_message": {
                 "inbox_id": envelope.inbox_id,
@@ -169,6 +236,7 @@ class SchedulerService:
                 subject=current.subject if current else (envelope.subject if envelope else "Scheduling Thread"),
                 participants=SQLiteStore.load_participants(current.participants_json) if current else [],
                 status=ThreadStatus.TIMES_PROPOSED,
+                approved_for_automation=current.approved_for_automation if current else False,
                 summary=current.summary if current else None,
                 last_message_id=current.last_message_id if current else None,
                 last_decision="reserved_slots",
@@ -187,6 +255,7 @@ class SchedulerService:
                     subject=current.subject or envelope.subject,
                     participants=SQLiteStore.load_participants(current.participants_json),
                     status=ThreadStatus.AWAITING_CONFIRMATION,
+                    approved_for_automation=current.approved_for_automation,
                     summary=current.summary,
                     last_message_id=request.message_id,
                     last_decision="reply_email",
@@ -208,6 +277,7 @@ class SchedulerService:
                     subject=envelope.subject,
                     participants=participants,
                     status=ThreadStatus.CONFIRMED,
+                    approved_for_automation=current.approved_for_automation if current else False,
                     summary=current.summary if current else None,
                     last_message_id=envelope.message_id,
                     last_decision="create_event",
@@ -251,6 +321,8 @@ class SchedulerService:
             "Resolve relative dates like next Tuesday using the provided "
             "current_local_datetime/current_local_date/current_local_weekday context values. "
             "Do not guess calendar dates; use exact dates in availability checks, proposals, and event creation. "
+            "Email sender trust is provided in context; if email_automation_trust_enforced is true and "
+            "thread_approved_for_automation is false, do not attempt autonomous replies or calendar mutations. "
             "Before proposing times, check availability and reserve the slots. "
             "When a meeting is confirmed, create the calendar event and notify the operator via Telegram. "
             "Use professional email tone and avoid making unsupported assumptions."
@@ -280,6 +352,7 @@ class SchedulerService:
             "subject": thread.subject,
             "participants": json.loads(thread.participants_json),
             "status": thread.status.value,
+            "approved_for_automation": thread.approved_for_automation,
             "summary": thread.summary,
             "last_message_id": thread.last_message_id,
             "last_decision": thread.last_decision,
@@ -313,3 +386,39 @@ class SchedulerService:
         if value.tzinfo is None:
             return value.replace(tzinfo=timezone)
         return value.astimezone(timezone)
+
+    async def _is_email_sender_trusted(self, sender: str) -> bool:
+        normalized_sender = sender.strip().lower()
+        if not normalized_sender:
+            return False
+        if normalized_sender in self.settings.email_trusted_senders:
+            return True
+        if await self.thread_state.is_trusted_sender(normalized_sender):
+            return True
+        sender_domain = self._email_domain(normalized_sender)
+        return bool(sender_domain and sender_domain in self.settings.email_trusted_domains)
+
+    @staticmethod
+    def _email_domain(sender: str) -> str | None:
+        if "@" not in sender:
+            return None
+        return sender.rsplit("@", 1)[1].strip().lower() or None
+
+    def _format_untrusted_email_notice(
+        self,
+        envelope: AgentMailEnvelope,
+        thread_approved_for_automation: bool,
+    ) -> str:
+        subject = envelope.subject or "(no subject)"
+        status = (
+            "thread remains approved for automation."
+            if thread_approved_for_automation
+            else "Reply with /trust_sender "
+            f"{envelope.sender.strip().lower()} to trust this sender, process queued email, and allow future automation."
+        )
+        return (
+            "Email automation blocked for untrusted sender\n"
+            f"From: {envelope.sender}\n"
+            f"Subject: {subject}\n"
+            f"Status: {status}"
+        )

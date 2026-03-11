@@ -1,10 +1,15 @@
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from app.db.models import ThreadStatus
 from app.schemas.email import AgentMailEnvelope
 from app.integrations.calendar import CalendarAPIError
 from app.services.scheduler import SchedulerService
+
+
+async def _async_return(value):
+    return value
 
 
 def test_select_candidate_slots_respects_spacing():
@@ -157,3 +162,279 @@ async def test_handle_telegram_message_passes_local_date_context():
     assert captured["extra_context"]["current_local_date"] == "2026-03-10"
     assert captured["extra_context"]["current_local_weekday"] == "Tuesday"
     assert captured["extra_context"]["current_local_datetime"].startswith("2026-03-10T19:30:00")
+
+
+@pytest.mark.asyncio
+async def test_is_trusted_email_sender_supports_sender_and_domain_allowlists():
+    scheduler = SchedulerService.__new__(SchedulerService)
+    scheduler.settings = type(
+        "SettingsStub",
+        (),
+        {
+            "email_trusted_senders": {"ceo@example.com"},
+            "email_trusted_domains": {"partners.com"},
+        },
+    )()
+    scheduler.thread_state = type(
+        "ThreadStateStub",
+        (),
+        {"is_trusted_sender": staticmethod(lambda sender: _async_return(False))},
+    )()
+
+    assert await scheduler._is_email_sender_trusted("ceo@example.com")
+    assert await scheduler._is_email_sender_trusted("someone@partners.com")
+    assert not await scheduler._is_email_sender_trusted("outsider@other.com")
+
+
+@pytest.mark.asyncio
+async def test_handle_email_blocks_untrusted_sender_when_policy_enabled():
+    scheduler = SchedulerService.__new__(SchedulerService)
+    scheduler.settings = type(
+        "SettingsStub",
+        (),
+        {
+            "app_timezone": "UTC",
+            "email_require_trust_for_automation": True,
+            "email_trusted_senders": {"trusted@example.com"},
+            "email_trusted_domains": {"example.com"},
+        },
+    )()
+
+    class ThreadRecordStub:
+        thread_id = "thread-1"
+        subject = "Test"
+        participants_json = '["attacker@evil.com"]'
+        status = ThreadStatus.NEW_REQUEST
+        approved_for_automation = False
+        summary = None
+        last_message_id = "msg-1"
+        last_decision = None
+        updated_at = datetime.now(UTC)
+
+    class ThreadStateStub:
+        def __init__(self):
+            self.marked = None
+            self.queued = None
+
+        async def is_processed(self, event_id):
+            return False
+
+        async def is_trusted_sender(self, sender):
+            return False
+
+        async def get_thread(self, thread_id):
+            return None
+
+        async def upsert_thread(self, **kwargs):
+            return ThreadRecordStub()
+
+        async def queue_pending_email_approval(self, **kwargs):
+            self.queued = kwargs
+
+        async def mark_processed(self, event_id, source):
+            self.marked = (event_id, source)
+
+    class TelegramStub:
+        def __init__(self):
+            self.messages = []
+
+        async def send_message(self, text, chat_id=None):
+            self.messages.append((text, chat_id))
+
+    class AgentStub:
+        async def run(self, **kwargs):
+            raise AssertionError("Agent should not run for untrusted email when policy is enabled.")
+
+    scheduler.thread_state = ThreadStateStub()
+    scheduler.telegram = TelegramStub()
+    scheduler.agent = AgentStub()
+    scheduler.calendar = None
+    scheduler.agentmail = None
+
+    envelope = AgentMailEnvelope(
+        event_id="evt-1",
+        event_type="message.received",
+        inbox_id="inbox-1",
+        thread_id="thread-1",
+        message_id="msg-1",
+        subject="Schedule a meeting",
+        sender="attacker@evil.com",
+        to=["assistant@example.agentmail.to"],
+        cc=[],
+        preview="Can we meet next Tuesday?",
+        body_text="Can we meet next Tuesday?",
+        received_at=datetime(2026, 3, 10, 13, 0, 0, tzinfo=UTC),
+    )
+
+    result = await scheduler.handle_email(envelope)
+
+    assert result["status"] == "blocked"
+    assert result["reason"] == "untrusted_thread"
+    assert scheduler.thread_state.marked == ("evt-1", "agentmail")
+    assert scheduler.thread_state.queued is not None
+    assert scheduler.telegram.messages
+    assert "Email automation blocked for untrusted sender" in scheduler.telegram.messages[0][0]
+    assert "/trust_sender attacker@evil.com" in scheduler.telegram.messages[0][0]
+
+
+@pytest.mark.asyncio
+async def test_handle_email_allows_untrusted_sender_on_approved_thread():
+    captured: dict = {}
+    scheduler = SchedulerService.__new__(SchedulerService)
+    scheduler.settings = type(
+        "SettingsStub",
+        (),
+        {
+            "app_timezone": "UTC",
+            "email_require_trust_for_automation": True,
+            "email_trusted_senders": {"trusted@example.com"},
+            "email_trusted_domains": {"example.com"},
+        },
+    )()
+
+    class ThreadRecordStub:
+        thread_id = "thread-1"
+        subject = "Test"
+        participants_json = '["trusted@example.com","outside@vendor.com"]'
+        status = ThreadStatus.TIMES_PROPOSED
+        approved_for_automation = True
+        summary = "approved"
+        last_message_id = "msg-1"
+        last_decision = "reply_email"
+        updated_at = datetime.now(UTC)
+
+    class ThreadStateStub:
+        def __init__(self):
+            self.marked = None
+            self.upsert_kwargs = None
+
+        async def is_processed(self, event_id):
+            return False
+
+        async def is_trusted_sender(self, sender):
+            return False
+
+        async def get_thread(self, thread_id):
+            return ThreadRecordStub()
+
+        async def upsert_thread(self, **kwargs):
+            self.upsert_kwargs = kwargs
+            return ThreadRecordStub()
+
+        async def list_active_proposals(self, thread_id):
+            return []
+
+        async def mark_processed(self, event_id, source):
+            self.marked = (event_id, source)
+
+    class CalendarStub:
+        async def upcoming_context(self, days=14):
+            return []
+
+    class AgentStub:
+        async def run(self, **kwargs):
+            captured.update(kwargs)
+            return {"text": "processed", "tool_calls": []}
+
+    class TelegramStub:
+        def __init__(self):
+            self.messages = []
+
+        async def send_message(self, text, chat_id=None):
+            self.messages.append((text, chat_id))
+
+    scheduler.thread_state = ThreadStateStub()
+    scheduler.telegram = TelegramStub()
+    scheduler.agent = AgentStub()
+    scheduler.calendar = CalendarStub()
+    scheduler.agentmail = None
+
+    envelope = AgentMailEnvelope(
+        event_id="evt-2",
+        event_type="message.received",
+        inbox_id="inbox-1",
+        thread_id="thread-1",
+        message_id="msg-2",
+        subject="Re: Schedule a meeting",
+        sender="outside@vendor.com",
+        to=["assistant@example.agentmail.to"],
+        cc=["trusted@example.com"],
+        preview="Tuesday works for me.",
+        body_text="Tuesday works for me.",
+        received_at=datetime(2026, 3, 10, 13, 0, 0, tzinfo=UTC),
+    )
+
+    result = await scheduler.handle_email(envelope)
+
+    assert result["text"] == "processed"
+    assert captured["extra_context"]["sender_trusted"] is False
+    assert captured["extra_context"]["thread_approved_for_automation"] is True
+    assert scheduler.thread_state.upsert_kwargs["approved_for_automation"] is True
+    assert scheduler.thread_state.marked == ("evt-2", "agentmail")
+
+
+@pytest.mark.asyncio
+async def test_approve_sender_trusts_sender_and_processes_pending_emails():
+    scheduler = SchedulerService.__new__(SchedulerService)
+    scheduler.settings = type(
+        "SettingsStub",
+        (),
+        {
+            "app_timezone": "UTC",
+            "email_require_trust_for_automation": True,
+            "email_trusted_senders": set(),
+            "email_trusted_domains": set(),
+        },
+    )()
+
+    processed = []
+
+    class ThreadStateStub:
+        def __init__(self):
+            self.trusted = []
+
+        async def add_trusted_sender(self, sender):
+            self.trusted.append(sender)
+
+        async def list_pending_email_approvals(self, sender):
+            envelope = AgentMailEnvelope(
+                event_id="evt-3",
+                event_type="message.received",
+                inbox_id="inbox-1",
+                thread_id="thread-3",
+                message_id="msg-3",
+                subject="Intro",
+                sender=sender,
+                to=["assistant@example.agentmail.to"],
+                cc=[],
+                preview="hello",
+                body_text="hello",
+                received_at=datetime(2026, 3, 10, 13, 0, 0, tzinfo=UTC),
+            )
+            return [
+                type(
+                    "ApprovalStub",
+                    (),
+                    {
+                        "id": 1,
+                        "envelope_json": envelope.model_dump_json(),
+                    },
+                )()
+            ]
+
+        async def delete_pending_email_approval(self, approval_id):
+            processed.append(("deleted", approval_id))
+
+    async def fake_process(envelope, *, skip_processed_check=False):
+        processed.append((envelope.sender, skip_processed_check))
+        return {"status": "processed"}
+
+    scheduler.thread_state = ThreadStateStub()
+    scheduler._process_email_envelope = fake_process
+
+    reply = await scheduler.approve_sender("new@sender.com")
+
+    assert scheduler.thread_state.trusted == ["new@sender.com"]
+    assert ("new@sender.com", True) in processed
+    assert ("deleted", 1) in processed
+    assert "Trusted sender added: new@sender.com." in reply

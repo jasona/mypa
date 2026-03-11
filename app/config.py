@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     agentmail_api_base: str = Field(default="https://api.agentmail.to", alias="AGENTMAIL_API_BASE")
     agentmail_webhook_secret: str | None = Field(default=None, alias="AGENTMAIL_WEBHOOK_SECRET")
     agentmail_inbox_address: str | None = Field(default=None, alias="AGENTMAIL_INBOX_ADDRESS")
+    email_trusted_senders_raw: str | None = Field(default=None, alias="EMAIL_TRUSTED_SENDERS")
+    email_trusted_domains_raw: str | None = Field(default=None, alias="EMAIL_TRUSTED_DOMAINS")
+    email_require_trust_for_automation: bool = Field(default=False, alias="EMAIL_REQUIRE_TRUST_FOR_AUTOMATION")
 
     google_client_id: str | None = Field(default=None, alias="GOOGLE_CLIENT_ID")
     google_client_secret: str | None = Field(default=None, alias="GOOGLE_CLIENT_SECRET")
@@ -55,14 +58,22 @@ class Settings(BaseSettings):
     @property
     def telegram_allowed_chat_ids(self) -> set[str]:
         if self.telegram_allowed_chat_ids_raw:
-            return {
-                chat_id.strip()
-                for chat_id in self.telegram_allowed_chat_ids_raw.split(",")
-                if chat_id.strip()
-            }
+            return self._parse_csv_values(self.telegram_allowed_chat_ids_raw)
         if self.telegram_admin_chat_id:
             return {self.telegram_admin_chat_id.strip()}
         return set()
+
+    @property
+    def email_trusted_senders(self) -> set[str]:
+        return {sender.lower() for sender in self._parse_csv_values(self.email_trusted_senders_raw)}
+
+    @property
+    def email_trusted_domains(self) -> set[str]:
+        return {
+            domain.lower().lstrip("@")
+            for domain in self._parse_csv_values(self.email_trusted_domains_raw)
+            if domain.strip()
+        }
 
     @property
     def calendar_alias_map(self) -> dict[str, str]:
@@ -75,6 +86,12 @@ class Settings(BaseSettings):
         if not isinstance(value, dict):
             return {}
         return {str(key).strip().lower(): str(mapped_value).strip() for key, mapped_value in value.items()}
+
+    @staticmethod
+    def _parse_csv_values(value: str | None) -> set[str]:
+        if not value:
+            return set()
+        return {item.strip() for item in value.split(",") if item.strip()}
 
 
 @lru_cache(maxsize=1)
