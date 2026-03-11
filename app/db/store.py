@@ -11,6 +11,7 @@ from app.db.models import (
     ProposalRecord,
     ProposalStatus,
     ThreadRecord,
+    ThreadCalendarEventRecord,
     ThreadStatus,
     TrustedSenderRecord,
 )
@@ -96,6 +97,16 @@ class SQLiteStore:
                     subject TEXT,
                     envelope_json TEXT NOT NULL,
                     created_at TEXT NOT NULL
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS thread_calendar_events (
+                    thread_id TEXT NOT NULL,
+                    event_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (thread_id, event_id)
                 )
                 """
             )
@@ -345,6 +356,55 @@ class SQLiteStore:
             )
             await db.commit()
         return cursor.rowcount if cursor.rowcount is not None else 0
+
+    async def bind_thread_calendar_event(self, thread_id: str, event_id: str) -> ThreadCalendarEventRecord:
+        record = ThreadCalendarEventRecord(thread_id=thread_id, event_id=event_id)
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                """
+                INSERT INTO thread_calendar_events (thread_id, event_id, created_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(thread_id, event_id) DO NOTHING
+                """,
+                (record.thread_id, record.event_id, record.created_at.isoformat()),
+            )
+            await db.commit()
+        return record
+
+    async def list_thread_calendar_event_ids(self, thread_id: str) -> list[str]:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                """
+                SELECT event_id
+                FROM thread_calendar_events
+                WHERE thread_id = ?
+                ORDER BY created_at ASC
+                """,
+                (thread_id,),
+            )
+            rows = await cursor.fetchall()
+        return [row[0] for row in rows]
+
+    async def is_thread_calendar_event_bound(self, thread_id: str, event_id: str) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                """
+                SELECT 1
+                FROM thread_calendar_events
+                WHERE thread_id = ? AND event_id = ?
+                """,
+                (thread_id, event_id),
+            )
+            row = await cursor.fetchone()
+        return row is not None
+
+    async def unbind_thread_calendar_event(self, thread_id: str, event_id: str) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "DELETE FROM thread_calendar_events WHERE thread_id = ? AND event_id = ?",
+                (thread_id, event_id),
+            )
+            await db.commit()
 
     @staticmethod
     def dump_participants(participants: list[str]) -> str:

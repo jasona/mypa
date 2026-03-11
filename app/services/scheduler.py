@@ -148,11 +148,16 @@ class SchedulerService:
             }
 
         active_proposals = await self.thread_state.list_active_proposals(envelope.thread_id)
+        restrict_calendar_mutations_to_thread_events = not sender_trusted
+        thread_bound_event_ids = await self.thread_state.list_thread_calendar_event_ids(envelope.thread_id)
+        upcoming_events = await self.calendar.upcoming_context(days=14)
         extra_context = {
             **self._runtime_context(envelope.received_at),
             "email_automation_trust_enforced": self.settings.email_require_trust_for_automation,
             "sender_trusted": sender_trusted,
             "thread_approved_for_automation": thread_approved_for_automation,
+            "calendar_mutations_restricted_to_thread_events": restrict_calendar_mutations_to_thread_events,
+            "thread_bound_event_ids": thread_bound_event_ids,
             "thread": self._serialize_thread(thread),
             "current_message": {
                 "inbox_id": envelope.inbox_id,
@@ -162,7 +167,11 @@ class SchedulerService:
                 "sender": envelope.sender,
             },
             "active_proposals": [proposal.model_dump(mode="json") for proposal in active_proposals],
-            "upcoming_events": await self.calendar.upcoming_context(days=14),
+            "upcoming_events": (
+                self._filter_upcoming_events_for_thread(upcoming_events, set(thread_bound_event_ids))
+                if restrict_calendar_mutations_to_thread_events
+                else upcoming_events
+            ),
         }
         prompt = (
             "Inbound email received.\n"
@@ -176,7 +185,12 @@ class SchedulerService:
         result = await self.agent.run(
             prompt=prompt,
             system_prompt=self._email_system_prompt(),
-            tool_handlers=self._tool_handlers(source="email", envelope=envelope),
+            tool_handlers=self._tool_handlers(
+                source="email",
+                envelope=envelope,
+                restrict_calendar_mutations_to_thread_events=restrict_calendar_mutations_to_thread_events,
+                thread_bound_event_ids=set(thread_bound_event_ids),
+            ),
             extra_context=extra_context,
         )
         await self.thread_state.mark_processed(envelope.event_id, "agentmail")
@@ -201,7 +215,11 @@ class SchedulerService:
         source: str,
         envelope: AgentMailEnvelope | None = None,
         telegram_message: TelegramInboundMessage | None = None,
+        restrict_calendar_mutations_to_thread_events: bool = False,
+        thread_bound_event_ids: set[str] | None = None,
     ):
+        bound_event_ids = thread_bound_event_ids or set()
+
         async def message_telegram(payload: dict) -> dict:
             chat_id = payload.get("chat_id") or (telegram_message.chat_id if telegram_message else None)
             await self.telegram.send_message(text=payload["text"], chat_id=chat_id)
@@ -270,6 +288,11 @@ class SchedulerService:
                     return {"status": "skipped", "reason": "thread_already_confirmed"}
             result = await self.calendar.create_event(event)
             if envelope:
+                created_event_id = str(result.get("id") or result.get("event_id") or "").strip()
+                if created_event_id:
+                    await self.thread_state.bind_thread_calendar_event(envelope.thread_id, created_event_id)
+                    bound_event_ids.add(created_event_id)
+            if envelope:
                 current = await self.thread_state.get_thread(envelope.thread_id)
                 participants = SQLiteStore.load_participants(current.participants_json) if current else []
                 await self.thread_state.upsert_thread(
@@ -289,10 +312,29 @@ class SchedulerService:
 
         async def update_event(payload: dict) -> dict:
             event = CalendarEventUpdate.model_validate(payload)
+            if envelope and restrict_calendar_mutations_to_thread_events and event.event_id not in bound_event_ids:
+                return {
+                    "status": "blocked",
+                    "reason": "event_not_bound_to_thread",
+                    "event_id": event.event_id,
+                    "thread_id": envelope.thread_id,
+                }
             return await self.calendar.update_event(event)
 
         async def delete_event(payload: dict) -> dict:
-            return await self.calendar.delete_event(payload["event_id"])
+            event_id = payload["event_id"]
+            if envelope and restrict_calendar_mutations_to_thread_events and event_id not in bound_event_ids:
+                return {
+                    "status": "blocked",
+                    "reason": "event_not_bound_to_thread",
+                    "event_id": event_id,
+                    "thread_id": envelope.thread_id,
+                }
+            result = await self.calendar.delete_event(event_id)
+            if envelope and event_id in bound_event_ids:
+                await self.thread_state.unbind_thread_calendar_event(envelope.thread_id, event_id)
+                bound_event_ids.discard(event_id)
+            return result
 
         return {
             "message_telegram": message_telegram,
@@ -323,6 +365,8 @@ class SchedulerService:
             "Do not guess calendar dates; use exact dates in availability checks, proposals, and event creation. "
             "Email sender trust is provided in context; if email_automation_trust_enforced is true and "
             "thread_approved_for_automation is false, do not attempt autonomous replies or calendar mutations. "
+            "If calendar_mutations_restricted_to_thread_events is true, only update or delete event IDs listed in "
+            "thread_bound_event_ids. Do not mutate arbitrary calendar events. "
             "Before proposing times, check availability and reserve the slots. "
             "When a meeting is confirmed, create the calendar event and notify the operator via Telegram. "
             "Use professional email tone and avoid making unsupported assumptions."
@@ -422,3 +466,9 @@ class SchedulerService:
             f"Subject: {subject}\n"
             f"Status: {status}"
         )
+
+    @staticmethod
+    def _filter_upcoming_events_for_thread(upcoming_events: list[dict], thread_bound_event_ids: set[str]) -> list[dict]:
+        if not thread_bound_event_ids:
+            return []
+        return [event for event in upcoming_events if str(event.get("id") or "") in thread_bound_event_ids]

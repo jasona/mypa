@@ -79,6 +79,20 @@ async def test_trusted_senders_and_pending_approvals_round_trip(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_thread_calendar_event_bindings_round_trip(tmp_path):
+    store = SQLiteStore(tmp_path / "agent.db")
+    await store.initialize()
+
+    assert await store.is_thread_calendar_event_bound("thread-1", "evt-1") is False
+    await store.bind_thread_calendar_event("thread-1", "evt-1")
+    assert await store.is_thread_calendar_event_bound("thread-1", "evt-1") is True
+    assert await store.list_thread_calendar_event_ids("thread-1") == ["evt-1"]
+
+    await store.unbind_thread_calendar_event("thread-1", "evt-1")
+    assert await store.list_thread_calendar_event_ids("thread-1") == []
+
+
+@pytest.mark.asyncio
 async def test_thread_state_falls_back_to_sqlite_when_redis_fails(tmp_path):
     class FailingRedis:
         def __init__(self):

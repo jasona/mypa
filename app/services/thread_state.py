@@ -106,6 +106,18 @@ class ThreadStateStore:
     async def delete_pending_email_approvals_for_sender(self, sender: str) -> int:
         return await self.sqlite_store.delete_pending_email_approvals_for_sender(sender)
 
+    async def bind_thread_calendar_event(self, thread_id: str, event_id: str) -> None:
+        await self.sqlite_store.bind_thread_calendar_event(thread_id, event_id)
+
+    async def list_thread_calendar_event_ids(self, thread_id: str) -> list[str]:
+        return await self.sqlite_store.list_thread_calendar_event_ids(thread_id)
+
+    async def is_thread_calendar_event_bound(self, thread_id: str, event_id: str) -> bool:
+        return await self.sqlite_store.is_thread_calendar_event_bound(thread_id, event_id)
+
+    async def unbind_thread_calendar_event(self, thread_id: str, event_id: str) -> None:
+        await self.sqlite_store.unbind_thread_calendar_event(thread_id, event_id)
+
     @staticmethod
     def _thread_key(thread_id: str) -> str:
         return f"thread:{thread_id}"

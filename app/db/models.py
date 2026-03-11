@@ -64,3 +64,9 @@ class PendingEmailApprovalRecord(BaseModel):
     subject: str | None = None
     envelope_json: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class ThreadCalendarEventRecord(BaseModel):
+    thread_id: str
+    event_id: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

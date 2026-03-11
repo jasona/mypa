@@ -324,6 +324,9 @@ async def test_handle_email_allows_untrusted_sender_on_approved_thread():
         async def list_active_proposals(self, thread_id):
             return []
 
+        async def list_thread_calendar_event_ids(self, thread_id):
+            return []
+
         async def mark_processed(self, event_id, source):
             self.marked = (event_id, source)
 
@@ -438,3 +441,160 @@ async def test_approve_sender_trusts_sender_and_processes_pending_emails():
     assert ("new@sender.com", True) in processed
     assert ("deleted", 1) in processed
     assert "Trusted sender added: new@sender.com." in reply
+
+
+@pytest.mark.asyncio
+async def test_external_email_calendar_mutations_are_limited_to_bound_events():
+    scheduler = SchedulerService.__new__(SchedulerService)
+
+    class CalendarStub:
+        def __init__(self):
+            self.updated = []
+
+        async def update_event(self, event):
+            self.updated.append(event.event_id)
+            return {"status": "updated", "event_id": event.event_id}
+
+    scheduler.calendar = CalendarStub()
+    scheduler.thread_state = type("ThreadStateStub", (), {"unbind_thread_calendar_event": staticmethod(_async_return)})()
+
+    envelope = AgentMailEnvelope(
+        event_id="evt-mail",
+        event_type="message.received",
+        inbox_id="inbox-1",
+        thread_id="thread-1",
+        message_id="msg-1",
+        subject="Reschedule",
+        sender="outside@vendor.com",
+        to=["assistant@example.agentmail.to"],
+        cc=[],
+        preview="Can we move it?",
+        body_text="Can we move it?",
+        received_at=datetime(2026, 3, 10, 13, 0, 0, tzinfo=UTC),
+    )
+
+    handlers = scheduler._tool_handlers(
+        source="email",
+        envelope=envelope,
+        restrict_calendar_mutations_to_thread_events=True,
+        thread_bound_event_ids={"evt-bound"},
+    )
+
+    result = await handlers["update_event"]({"event_id": "evt-other", "title": "Moved"})
+
+    assert result["status"] == "blocked"
+    assert result["reason"] == "event_not_bound_to_thread"
+    assert scheduler.calendar.updated == []
+
+
+@pytest.mark.asyncio
+async def test_trusted_email_calendar_mutations_can_update_unbound_events():
+    scheduler = SchedulerService.__new__(SchedulerService)
+
+    class CalendarStub:
+        async def update_event(self, event):
+            return {"status": "updated", "event_id": event.event_id}
+
+    scheduler.calendar = CalendarStub()
+    scheduler.thread_state = type("ThreadStateStub", (), {"unbind_thread_calendar_event": staticmethod(_async_return)})()
+
+    envelope = AgentMailEnvelope(
+        event_id="evt-mail",
+        event_type="message.received",
+        inbox_id="inbox-1",
+        thread_id="thread-1",
+        message_id="msg-1",
+        subject="Reschedule",
+        sender="trusted@example.com",
+        to=["assistant@example.agentmail.to"],
+        cc=[],
+        preview="Please move this.",
+        body_text="Please move this.",
+        received_at=datetime(2026, 3, 10, 13, 0, 0, tzinfo=UTC),
+    )
+
+    handlers = scheduler._tool_handlers(
+        source="email",
+        envelope=envelope,
+        restrict_calendar_mutations_to_thread_events=False,
+        thread_bound_event_ids=set(),
+    )
+
+    result = await handlers["update_event"]({"event_id": "evt-unbound", "title": "Moved"})
+
+    assert result["status"] == "updated"
+    assert result["event_id"] == "evt-unbound"
+
+
+@pytest.mark.asyncio
+async def test_email_created_events_are_bound_to_thread():
+    scheduler = SchedulerService.__new__(SchedulerService)
+
+    class ThreadRecordStub:
+        status = ThreadStatus.NEW_REQUEST
+        participants_json = '["trusted@example.com"]'
+        approved_for_automation = True
+        summary = None
+
+    class ThreadStateStub:
+        def __init__(self):
+            self.bound = []
+            self.upserts = []
+
+        async def get_thread(self, thread_id):
+            return ThreadRecordStub()
+
+        async def bind_thread_calendar_event(self, thread_id, event_id):
+            self.bound.append((thread_id, event_id))
+
+        async def upsert_thread(self, **kwargs):
+            self.upserts.append(kwargs)
+
+    class CalendarStub:
+        async def create_event(self, event):
+            return {"id": "evt-created"}
+
+    class TelegramStub:
+        async def send_message(self, text, chat_id=None):
+            return None
+
+    scheduler.thread_state = ThreadStateStub()
+    scheduler.calendar = CalendarStub()
+    scheduler.telegram = TelegramStub()
+
+    envelope = AgentMailEnvelope(
+        event_id="evt-mail",
+        event_type="message.received",
+        inbox_id="inbox-1",
+        thread_id="thread-1",
+        message_id="msg-1",
+        subject="Schedule",
+        sender="trusted@example.com",
+        to=["assistant@example.agentmail.to"],
+        cc=[],
+        preview="Book it.",
+        body_text="Book it.",
+        received_at=datetime(2026, 3, 10, 13, 0, 0, tzinfo=UTC),
+    )
+
+    handlers = scheduler._tool_handlers(source="email", envelope=envelope)
+
+    result = await handlers["create_event"](
+        {
+            "title": "Meeting",
+            "start_at": "2026-03-12T10:00:00+00:00",
+            "end_at": "2026-03-12T10:30:00+00:00",
+            "timezone": "UTC",
+        }
+    )
+
+    assert result["id"] == "evt-created"
+    assert scheduler.thread_state.bound == [("thread-1", "evt-created")]
+
+
+def test_filter_upcoming_events_for_thread_returns_only_bound_events():
+    events = [{"id": "evt-1"}, {"id": "evt-2"}, {"id": "evt-3"}]
+
+    filtered = SchedulerService._filter_upcoming_events_for_thread(events, {"evt-2"})
+
+    assert filtered == [{"id": "evt-2"}]
