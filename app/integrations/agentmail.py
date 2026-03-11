@@ -39,6 +39,7 @@ class AgentMailService:
     def parse_webhook(self, payload: dict[str, Any]) -> AgentMailEnvelope:
         event_type = str(payload.get("event_type") or "message.received")
         event_id = payload.get("event_id") or payload.get("id")
+        inbox_id = payload.get("inbox_id") or payload.get("message", {}).get("inbox_id") or payload.get("thread", {}).get("inbox_id")
         thread_id = payload.get("thread_id") or payload.get("thread", {}).get("id")
         message_id = payload.get("message_id") or payload.get("message", {}).get("id")
         message = payload.get("message", {})
@@ -47,6 +48,7 @@ class AgentMailService:
         to_addresses = self._coerce_address_list(payload.get("to") or message.get("to") or [])
         cc_addresses = self._coerce_address_list(payload.get("cc") or message.get("cc") or [])
         event_id = str(event_id) if event_id is not None else None
+        inbox_id = str(inbox_id) if inbox_id is not None else None
         thread_id = str(thread_id or message.get("thread_id")) if (thread_id or message.get("thread_id")) is not None else None
         message_id = (
             str(message_id or message.get("message_id"))
@@ -55,6 +57,8 @@ class AgentMailService:
         )
         if not event_id or event_id == "None":
             raise ValueError("AgentMail payload is missing event_id.")
+        if not inbox_id or inbox_id == "None":
+            raise ValueError("AgentMail payload is missing inbox_id.")
         if not thread_id or thread_id == "None":
             raise ValueError("AgentMail payload is missing thread_id.")
         if not message_id or message_id == "None":
@@ -63,6 +67,7 @@ class AgentMailService:
             return AgentMailEnvelope(
                 event_type=event_type,
                 event_id=event_id,
+                inbox_id=inbox_id,
                 thread_id=thread_id,
                 message_id=message_id,
                 subject=payload.get("subject") or message.get("subject") or "",
@@ -98,21 +103,29 @@ class AgentMailService:
 
     async def reply_email(self, request: EmailReplyRequest) -> dict[str, Any]:
         if not self.api_key:
-            logger.warning("AgentMail API key missing; reply simulated for thread %s.", request.thread_id)
-            return {"status": "simulated", "thread_id": request.thread_id}
+            logger.warning("AgentMail API key missing; reply simulated for message %s.", request.message_id)
+            return {"status": "simulated", "message_id": request.message_id, "thread_id": None}
 
-        headers = {"Authorization": f"Bearer {self.api_key}"}
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
         payload = {
-            "thread_id": request.thread_id,
-            "subject": request.subject,
             "text": request.body_text,
+            "html": request.body_html,
             "to": request.to,
             "cc": request.cc,
-            "in_reply_to": request.in_reply_to,
+            "bcc": request.bcc,
+            "reply_to": request.reply_to,
+            "reply_all": request.reply_all,
         }
         async with httpx.AsyncClient(timeout=30.0) as client:
             async def do_request() -> dict[str, Any]:
-                response = await client.post(f"{self.api_base}/v1/messages/reply", json=payload, headers=headers)
+                response = await client.post(
+                    f"{self.api_base}/v0/inboxes/{request.inbox_id}/messages/{request.message_id}/reply",
+                    json={key: value for key, value in payload.items() if value not in (None, [], "")},
+                    headers=headers,
+                )
                 response.raise_for_status()
                 return response.json()
 

@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 class AgentMailEnvelope(BaseModel):
     event_type: str = "message.received"
     event_id: str
+    inbox_id: str
     thread_id: str
     message_id: str
     subject: str
@@ -21,9 +22,12 @@ class AgentMailEnvelope(BaseModel):
 
 
 class EmailReplyRequest(BaseModel):
-    thread_id: str
-    subject: str
+    inbox_id: str
+    message_id: str
     body_text: str
+    body_html: str | None = None
     to: list[str] = Field(default_factory=list)
     cc: list[str] = Field(default_factory=list)
-    in_reply_to: str | None = None
+    bcc: list[str] = Field(default_factory=list)
+    reply_to: list[str] = Field(default_factory=list)
+    reply_all: bool = True

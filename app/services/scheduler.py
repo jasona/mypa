@@ -70,6 +70,13 @@ class SchedulerService:
         extra_context = {
             "timezone": self.settings.app_timezone,
             "thread": self._serialize_thread(thread),
+            "current_message": {
+                "inbox_id": envelope.inbox_id,
+                "message_id": envelope.message_id,
+                "thread_id": envelope.thread_id,
+                "subject": envelope.subject,
+                "sender": envelope.sender,
+            },
             "active_proposals": [proposal.model_dump(mode="json") for proposal in active_proposals],
             "upcoming_events": await self.calendar.upcoming_context(days=14),
         }
@@ -78,6 +85,7 @@ class SchedulerService:
             f"From: {envelope.sender}\n"
             f"Subject: {envelope.subject}\n"
             f"Body:\n{envelope.body_text}\n\n"
+            "If replying by email, use the provided current_message inbox_id and message_id with reply_email.\n"
             "If the thread is about scheduling, use check_availability, reserve_slots, and reply_email.\n"
             "If a time is confirmed, create the event and notify the operator on Telegram.\n"
         )
@@ -148,15 +156,17 @@ class SchedulerService:
         async def reply_email(payload: dict) -> dict:
             request = EmailReplyRequest.model_validate(payload)
             result = await self.agentmail.reply_email(request)
-            current = await self.thread_state.get_thread(request.thread_id)
+            if not envelope:
+                return result
+            current = await self.thread_state.get_thread(envelope.thread_id)
             if current:
                 await self.thread_state.upsert_thread(
                     thread_id=current.thread_id,
-                    subject=current.subject or request.subject,
+                    subject=current.subject or envelope.subject,
                     participants=SQLiteStore.load_participants(current.participants_json),
                     status=ThreadStatus.AWAITING_CONFIRMATION,
                     summary=current.summary,
-                    last_message_id=request.in_reply_to,
+                    last_message_id=request.message_id,
                     last_decision="reply_email",
                 )
             return result
