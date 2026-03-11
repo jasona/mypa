@@ -15,10 +15,19 @@ TelegramCallback = Callable[[TelegramInboundMessage], Awaitable[str | None]]
 
 
 class TelegramBotService:
-    def __init__(self, token: str | None, default_chat_id: str | None, on_message: TelegramCallback):
+    def __init__(
+        self,
+        token: str | None,
+        default_chat_id: str | None,
+        on_message: TelegramCallback,
+        allowed_chat_ids: set[str] | None = None,
+        allow_group_chats: bool = False,
+    ):
         self.token = token
         self.default_chat_id = default_chat_id
         self.on_message = on_message
+        self.allowed_chat_ids = {chat_id.strip() for chat_id in (allowed_chat_ids or set()) if chat_id.strip()}
+        self.allow_group_chats = allow_group_chats
         self.application: Application | None = None
 
     @property
@@ -59,10 +68,14 @@ class TelegramBotService:
         await self.application.bot.send_message(chat_id=target_chat, text=text)
 
     async def _handle_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._authorize_update(update):
+            return
         if update.effective_message:
             await update.effective_message.reply_text("Persistent agent daemon is online.")
 
     async def _handle_whoami(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._authorize_update(update):
+            return
         if not update.effective_message or not update.effective_chat:
             return
         await update.effective_message.reply_text(
@@ -71,6 +84,8 @@ class TelegramBotService:
         )
 
     async def _handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._authorize_update(update):
+            return
         if not update.effective_message or not update.effective_chat:
             return
         inbound = TelegramInboundMessage(
@@ -82,3 +97,22 @@ class TelegramBotService:
         reply = await self.on_message(inbound)
         if reply:
             await update.effective_message.reply_text(reply)
+
+    def is_inbound_chat_allowed(self, chat_id: str, chat_type: str) -> bool:
+        if chat_type != "private" and not self.allow_group_chats:
+            return False
+        if not self.allowed_chat_ids:
+            return True
+        return chat_id in self.allowed_chat_ids
+
+    async def _authorize_update(self, update: Update) -> bool:
+        if not update.effective_chat:
+            return False
+        chat_id = str(update.effective_chat.id)
+        chat_type = update.effective_chat.type
+        if self.is_inbound_chat_allowed(chat_id, chat_type):
+            return True
+        logger.warning("Unauthorized Telegram chat blocked: id=%s type=%s", chat_id, chat_type)
+        if update.effective_message and chat_type == "private":
+            await update.effective_message.reply_text("This bot is not authorized for this chat.")
+        return False

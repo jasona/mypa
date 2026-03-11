@@ -11,6 +11,7 @@ If you are starting from scratch, use the docs in this order:
 5. [AgentMail Setup](agentmail.md)
 6. [Google Calendar Setup](google-calendar.md)
 7. [Running And Verification](running.md)
+8. [Security Hardening Plan](security-hardening.md)
 
 ## What Each Guide Covers
 
@@ -21,6 +22,7 @@ If you are starting from scratch, use the docs in this order:
 - [AgentMail Setup](agentmail.md): inbox, webhook, signature validation, and outbound reply notes
 - [Google Calendar Setup](google-calendar.md): OAuth credentials, refresh token, and calendar scopes
 - [Running And Verification](running.md): local run, Docker run, health checks, and end-to-end smoke tests
+- [Security Hardening Plan](security-hardening.md): phased implementation plan for abuse prevention and production hardening
 
 ## Recommended First Success Path
 

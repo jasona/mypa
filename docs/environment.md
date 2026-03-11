@@ -36,6 +36,8 @@ If `ANTHROPIC_API_KEY` is blank, the service still starts, but autonomous reason
 
 - `TELEGRAM_BOT_TOKEN`: required to enable polling
 - `TELEGRAM_ADMIN_CHAT_ID`: optional but strongly recommended for operator notifications
+- `TELEGRAM_ALLOWED_CHAT_IDS`: optional comma-separated allowlist for inbound operator chats. If left blank, the app falls back to `TELEGRAM_ADMIN_CHAT_ID` for inbound authorization when that value is set.
+- `TELEGRAM_ALLOW_GROUP_CHATS`: defaults to `false`. Keep this disabled unless you explicitly want the bot to operate in group chats.
 
 If `TELEGRAM_BOT_TOKEN` is blank, Telegram polling is disabled.
 

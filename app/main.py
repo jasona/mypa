@@ -47,6 +47,8 @@ async def lifespan(app: FastAPI):
     telegram_service = TelegramBotService(
         token=settings.telegram_bot_token,
         default_chat_id=settings.telegram_admin_chat_id,
+        allowed_chat_ids=settings.telegram_allowed_chat_ids,
+        allow_group_chats=settings.telegram_allow_group_chats,
         on_message=on_telegram_message,
     )
     scheduler = SchedulerService(

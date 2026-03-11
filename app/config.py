@@ -26,6 +26,8 @@ class Settings(BaseSettings):
 
     telegram_bot_token: str | None = Field(default=None, alias="TELEGRAM_BOT_TOKEN")
     telegram_admin_chat_id: str | None = Field(default=None, alias="TELEGRAM_ADMIN_CHAT_ID")
+    telegram_allowed_chat_ids_raw: str | None = Field(default=None, alias="TELEGRAM_ALLOWED_CHAT_IDS")
+    telegram_allow_group_chats: bool = Field(default=False, alias="TELEGRAM_ALLOW_GROUP_CHATS")
 
     agentmail_api_key: str | None = Field(default=None, alias="AGENTMAIL_API_KEY")
     agentmail_api_base: str = Field(default="https://api.agentmail.to", alias="AGENTMAIL_API_BASE")
@@ -49,6 +51,18 @@ class Settings(BaseSettings):
     @property
     def sqlite_file(self) -> Path:
         return Path(self.sqlite_path)
+
+    @property
+    def telegram_allowed_chat_ids(self) -> set[str]:
+        if self.telegram_allowed_chat_ids_raw:
+            return {
+                chat_id.strip()
+                for chat_id in self.telegram_allowed_chat_ids_raw.split(",")
+                if chat_id.strip()
+            }
+        if self.telegram_admin_chat_id:
+            return {self.telegram_admin_chat_id.strip()}
+        return set()
 
     @property
     def calendar_alias_map(self) -> dict[str, str]:
