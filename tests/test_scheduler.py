@@ -114,3 +114,46 @@ async def test_handle_telegram_message_includes_google_error_message():
 
     assert "Google returned 400." in reply
     assert "Invalid calendar identifier" in reply
+
+
+@pytest.mark.asyncio
+async def test_handle_telegram_message_passes_local_date_context():
+    captured: dict = {}
+    scheduler = SchedulerService.__new__(SchedulerService)
+    scheduler.settings = type(
+        "SettingsStub",
+        (),
+        {
+            "app_timezone": "America/New_York",
+            "timezone": __import__("zoneinfo").ZoneInfo("America/New_York"),
+        },
+    )()
+
+    class CalendarStub:
+        async def upcoming_context(self, days=14):
+            return []
+
+    class AgentStub:
+        async def run(self, **kwargs):
+            captured.update(kwargs)
+            return {"text": "ok", "tool_calls": []}
+
+    scheduler.calendar = CalendarStub()
+    scheduler.agent = AgentStub()
+    scheduler._tool_handlers = lambda **kwargs: {}
+
+    from app.schemas.telegram import TelegramInboundMessage
+
+    reply = await scheduler.handle_telegram_message(
+        TelegramInboundMessage(
+            chat_id="123",
+            text="Set something for next Tuesday",
+            message_id="1",
+            sent_at=datetime.fromisoformat("2026-03-10T23:30:00+00:00"),
+        )
+    )
+
+    assert reply == "ok"
+    assert captured["extra_context"]["current_local_date"] == "2026-03-10"
+    assert captured["extra_context"]["current_local_weekday"] == "Tuesday"
+    assert captured["extra_context"]["current_local_datetime"].startswith("2026-03-10T19:30:00")

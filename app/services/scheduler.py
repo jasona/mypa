@@ -4,6 +4,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from app.config import Settings
 from app.db.models import ProposalRecord, ThreadStatus
@@ -39,7 +40,7 @@ class SchedulerService:
 
     async def handle_telegram_message(self, message: TelegramInboundMessage) -> str:
         extra_context = {
-            "timezone": self.settings.app_timezone,
+            **self._runtime_context(message.sent_at),
             "upcoming_events": await self.calendar.upcoming_context(days=14),
         }
         allowed_tool_names = {
@@ -84,7 +85,7 @@ class SchedulerService:
 
         active_proposals = await self.thread_state.list_active_proposals(envelope.thread_id)
         extra_context = {
-            "timezone": self.settings.app_timezone,
+            **self._runtime_context(envelope.received_at),
             "thread": self._serialize_thread(thread),
             "current_message": {
                 "inbox_id": envelope.inbox_id,
@@ -237,6 +238,9 @@ class SchedulerService:
         return (
             "You are a concise personal assistant operating via Telegram. "
             "Use tools when live data or actions are required. "
+            "Resolve relative dates like today, tomorrow, and next Tuesday using the provided "
+            "current_local_datetime/current_local_date/current_local_weekday context values. "
+            "Do not guess calendar dates; use exact dates in tool calls and confirmations. "
             "If the user asks about coworkers, pass their names or email/calendar IDs via check_availability.calendar_ids. "
             "Prefer direct answers and keep the operator informed."
         )
@@ -244,6 +248,9 @@ class SchedulerService:
     def _email_system_prompt(self) -> str:
         return (
             "You are a scheduling assistant handling inbound email threads. "
+            "Resolve relative dates like next Tuesday using the provided "
+            "current_local_datetime/current_local_date/current_local_weekday context values. "
+            "Do not guess calendar dates; use exact dates in availability checks, proposals, and event creation. "
             "Before proposing times, check availability and reserve the slots. "
             "When a meeting is confirmed, create the calendar event and notify the operator via Telegram. "
             "Use professional email tone and avoid making unsupported assumptions."
@@ -291,3 +298,18 @@ class SchedulerService:
         if len(normalized) <= 160:
             return normalized
         return normalized[:157].rstrip() + "..."
+
+    def _runtime_context(self, reference_at: datetime) -> dict[str, str]:
+        localized = self._localize_datetime(reference_at)
+        return {
+            "timezone": self.settings.app_timezone,
+            "current_local_datetime": localized.isoformat(),
+            "current_local_date": localized.date().isoformat(),
+            "current_local_weekday": localized.strftime("%A"),
+        }
+
+    def _localize_datetime(self, value: datetime) -> datetime:
+        timezone = ZoneInfo(self.settings.app_timezone)
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone)
+        return value.astimezone(timezone)
