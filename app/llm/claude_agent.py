@@ -26,6 +26,7 @@ class ClaudeAgent:
         system_prompt: str,
         tool_handlers: dict[str, ToolHandler],
         extra_context: dict[str, Any] | None = None,
+        allowed_tool_names: set[str] | None = None,
         max_rounds: int = 6,
     ) -> dict[str, Any]:
         if not self.client:
@@ -34,7 +35,11 @@ class ClaudeAgent:
                 "tool_calls": [],
             }
 
-        tools = [tool.model_dump() for tool in self.tool_definitions()]
+        tools = [
+            tool.model_dump()
+            for tool in self.tool_definitions()
+            if allowed_tool_names is None or tool.name in allowed_tool_names
+        ]
         user_prompt = prompt
         if extra_context:
             user_prompt = f"{prompt}\n\nContext:\n{json.dumps(extra_context, indent=2, default=str)}"

@@ -42,11 +42,18 @@ class SchedulerService:
             "timezone": self.settings.app_timezone,
             "upcoming_events": await self.calendar.upcoming_context(days=14),
         }
+        allowed_tool_names = {
+            "check_availability",
+            "create_event",
+            "update_event",
+            "delete_event",
+        }
         result = await self.agent.run(
             prompt=f"Telegram message from operator:\n{message.text}",
             system_prompt=self._telegram_system_prompt(),
             tool_handlers=self._tool_handlers(source="telegram", telegram_message=message),
             extra_context=extra_context,
+            allowed_tool_names=allowed_tool_names,
         )
         return result["text"] or "Request processed."
 
