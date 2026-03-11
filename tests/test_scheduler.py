@@ -53,6 +53,42 @@ def test_summarize_email_trims_signature_content():
     assert summary == "This is a test. Can you reply yet?"
 
 
+def test_prepare_email_body_for_llm_strips_quoted_history_and_truncates():
+    scheduler = SchedulerService.__new__(SchedulerService)
+    scheduler.settings = type("SettingsStub", (), {"max_email_body_chars": 40})()
+    envelope = AgentMailEnvelope(
+        event_id="evt-1",
+        event_type="message.received",
+        inbox_id="inbox-1",
+        thread_id="thread-1",
+        message_id="msg-1",
+        subject="Test",
+        sender="sender@example.com",
+        preview="",
+        body_text="Hello team,\nCan we meet tomorrow?\n\nOn Tue, someone wrote:\n> quoted history",
+        received_at=datetime(2026, 3, 10, 13, 0, 0),
+    )
+
+    excerpt = scheduler.prepare_email_body_for_llm(envelope)
+
+    assert "quoted history" not in excerpt
+    assert "On Tue, someone wrote:" not in excerpt
+    assert excerpt == "Hello team,\nCan we meet tomorrow?"
+
+
+def test_filter_upcoming_events_for_thread_returns_summarized_bound_events():
+    events = [
+        {"id": "evt-1", "summary": "One", "status": "confirmed", "start": {"dateTime": "a"}, "end": {"dateTime": "b"}},
+        {"id": "evt-2", "summary": "Two", "status": "tentative", "start": {"dateTime": "c"}, "end": {"dateTime": "d"}},
+    ]
+
+    filtered = SchedulerService._filter_upcoming_events_for_thread(events, {"evt-2"})
+
+    assert filtered == [
+        {"id": "evt-2", "summary": "Two", "status": "tentative", "start": {"dateTime": "c"}, "end": {"dateTime": "d"}}
+    ]
+
+
 @pytest.mark.asyncio
 async def test_handle_telegram_message_returns_friendly_calendar_error():
     scheduler = SchedulerService.__new__(SchedulerService)
@@ -592,9 +628,3 @@ async def test_email_created_events_are_bound_to_thread():
     assert scheduler.thread_state.bound == [("thread-1", "evt-created")]
 
 
-def test_filter_upcoming_events_for_thread_returns_only_bound_events():
-    events = [{"id": "evt-1"}, {"id": "evt-2"}, {"id": "evt-3"}]
-
-    filtered = SchedulerService._filter_upcoming_events_for_thread(events, {"evt-2"})
-
-    assert filtered == [{"id": "evt-2"}]

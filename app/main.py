@@ -121,14 +121,15 @@ async def agentmail_webhook(request: Request, background_tasks: BackgroundTasks)
     scheduler = request.app.state.scheduler
     sqlite_store = request.app.state.sqlite_store
     telegram = request.app.state.telegram
+    settings = request.app.state.settings
     try:
         envelope = agentmail.parse_webhook(payload)
-        background_tasks.add_task(process_agentmail_event, scheduler, sqlite_store, telegram, payload, envelope)
+        background_tasks.add_task(process_agentmail_event, scheduler, sqlite_store, telegram, settings, payload, envelope)
         return {"status": "accepted", "event_type": envelope.event_type, "event_id": envelope.event_id}
     except Exception as exc:
         await sqlite_store.save_dead_letter(
             source="agentmail",
-            payload_json=json.dumps(payload, default=str),
+            payload_json=serialize_dead_letter_payload(payload, settings.dead_letter_payload_chars),
             error=str(exc),
             event_id=payload.get("event_id") or payload.get("id"),
         )
@@ -136,7 +137,7 @@ async def agentmail_webhook(request: Request, background_tasks: BackgroundTasks)
         raise HTTPException(status_code=500, detail="Failed to process webhook") from exc
 
 
-async def process_agentmail_event(scheduler, sqlite_store, telegram, payload: dict, envelope) -> None:
+async def process_agentmail_event(scheduler, sqlite_store, telegram, settings, payload: dict, envelope) -> None:
     try:
         if envelope.event_type == "message.received":
             if await scheduler.thread_state.is_processed(envelope.event_id):
@@ -150,7 +151,7 @@ async def process_agentmail_event(scheduler, sqlite_store, telegram, payload: di
         logger.exception("AgentMail background processing failed for event %s", envelope.event_id)
         await sqlite_store.save_dead_letter(
             source="agentmail",
-            payload_json=json.dumps(payload, default=str),
+            payload_json=serialize_dead_letter_payload(payload, settings.dead_letter_payload_chars),
             error=str(exc),
             event_id=payload.get("event_id") or payload.get("id"),
         )
@@ -172,3 +173,20 @@ def _trim_text(value: str, limit: int) -> str:
     if len(value) <= limit:
         return value
     return value[: limit - 3] + "..."
+
+
+def serialize_dead_letter_payload(payload: dict, max_chars: int) -> str:
+    return json.dumps(_sanitize_dead_letter_value(payload, max_chars), default=str)
+
+
+def _sanitize_dead_letter_value(value, max_chars: int, key_name: str | None = None):
+    redacted_keys = {"body_text", "body_html", "quoted_text", "html", "text"}
+    if isinstance(value, dict):
+        return {key: _sanitize_dead_letter_value(item, max_chars, key) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_dead_letter_value(item, max_chars, key_name) for item in value]
+    if isinstance(value, str):
+        if key_name and key_name.lower() in redacted_keys:
+            return f"[redacted {len(value)} chars]"
+        return _trim_text(value, max_chars)
+    return value

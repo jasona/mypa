@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     email_trusted_senders_raw: str | None = Field(default=None, alias="EMAIL_TRUSTED_SENDERS")
     email_trusted_domains_raw: str | None = Field(default=None, alias="EMAIL_TRUSTED_DOMAINS")
     email_require_trust_for_automation: bool = Field(default=False, alias="EMAIL_REQUIRE_TRUST_FOR_AUTOMATION")
+    max_email_body_chars: int = Field(default=2000, alias="MAX_EMAIL_BODY_CHARS")
+    dead_letter_payload_chars: int = Field(default=500, alias="DEAD_LETTER_PAYLOAD_CHARS")
 
     google_client_id: str | None = Field(default=None, alias="GOOGLE_CLIENT_ID")
     google_client_secret: str | None = Field(default=None, alias="GOOGLE_CLIENT_SECRET")
