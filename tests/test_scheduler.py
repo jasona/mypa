@@ -201,6 +201,47 @@ async def test_handle_telegram_message_passes_local_date_context():
 
 
 @pytest.mark.asyncio
+async def test_handle_telegram_message_allows_send_email_tool():
+    captured: dict = {}
+    scheduler = SchedulerService.__new__(SchedulerService)
+    scheduler.settings = type(
+        "SettingsStub",
+        (),
+        {
+            "app_timezone": "UTC",
+            "timezone": __import__("zoneinfo").ZoneInfo("UTC"),
+        },
+    )()
+
+    class CalendarStub:
+        async def upcoming_context(self, days=14):
+            return []
+
+    class AgentStub:
+        async def run(self, **kwargs):
+            captured.update(kwargs)
+            return {"text": "ok", "tool_calls": []}
+
+    scheduler.calendar = CalendarStub()
+    scheduler.agent = AgentStub()
+    scheduler._tool_handlers = lambda **kwargs: {}
+
+    from app.schemas.telegram import TelegramInboundMessage
+
+    reply = await scheduler.handle_telegram_message(
+        TelegramInboundMessage(
+            chat_id="123",
+            text="Email someone about a meeting",
+            message_id="1",
+            sent_at=datetime(2026, 3, 10, 12, 0, 0),
+        )
+    )
+
+    assert reply == "ok"
+    assert "send_email" in captured["allowed_tool_names"]
+
+
+@pytest.mark.asyncio
 async def test_is_trusted_email_sender_supports_sender_and_domain_allowlists():
     scheduler = SchedulerService.__new__(SchedulerService)
     scheduler.settings = type(
@@ -414,6 +455,176 @@ async def test_handle_email_allows_untrusted_sender_on_approved_thread():
     assert captured["extra_context"]["thread_approved_for_automation"] is True
     assert scheduler.thread_state.upsert_kwargs["approved_for_automation"] is True
     assert scheduler.thread_state.marked == ("evt-2", "agentmail")
+
+
+@pytest.mark.asyncio
+async def test_send_email_tool_uses_configured_inbox_for_operator_requests():
+    scheduler = SchedulerService.__new__(SchedulerService)
+    scheduler.settings = type(
+        "SettingsStub",
+        (),
+        {
+            "agentmail_inbox_address": "assistant@example.agentmail.to",
+        },
+    )()
+
+    class AgentMailStub:
+        def __init__(self):
+            self.request = None
+
+        async def send_email(self, request):
+            self.request = request
+            return {"status": "sent", "message_id": "msg-1", "thread_id": "thread-1"}
+
+    scheduler.agentmail = AgentMailStub()
+    scheduler.telegram = None
+    scheduler.thread_state = None
+
+    handlers = scheduler._tool_handlers(source="telegram")
+    result = await handlers["send_email"](
+        {
+            "to": ["outside@example.com"],
+            "subject": "Meeting coordination",
+            "body_text": "Can we meet next week?",
+        }
+    )
+
+    assert result["status"] == "sent"
+    assert scheduler.agentmail.request.inbox_id == "assistant@example.agentmail.to"
+    assert scheduler.agentmail.request.to == ["outside@example.com"]
+    assert scheduler.agentmail.request.subject == "Meeting coordination"
+
+
+@pytest.mark.asyncio
+async def test_send_email_tool_allows_trusted_email_sender_to_initiate_outbound_email():
+    scheduler = SchedulerService.__new__(SchedulerService)
+    scheduler.settings = type(
+        "SettingsStub",
+        (),
+        {
+            "agentmail_inbox_address": "assistant@example.agentmail.to",
+            "email_trusted_senders": set(),
+            "email_trusted_domains": {"example.com"},
+        },
+    )()
+
+    class AgentMailStub:
+        def __init__(self):
+            self.request = None
+
+        async def send_email(self, request):
+            self.request = request
+            return {"status": "sent", "message_id": "msg-1", "thread_id": "thread-1"}
+
+    class ThreadStateStub:
+        async def is_trusted_sender(self, sender):
+            return False
+
+    class TelegramStub:
+        async def send_message(self, text, chat_id=None):
+            raise AssertionError("No alert should be sent for trusted initiation.")
+
+    scheduler.agentmail = AgentMailStub()
+    scheduler.thread_state = ThreadStateStub()
+    scheduler.telegram = TelegramStub()
+
+    envelope = AgentMailEnvelope(
+        event_id="evt-1",
+        event_type="message.received",
+        inbox_id="assistant@example.agentmail.to",
+        thread_id="thread-1",
+        message_id="msg-1",
+        subject="Please coordinate",
+        sender="ceo@example.com",
+        to=["assistant@example.agentmail.to"],
+        cc=[],
+        preview="",
+        body_text="",
+        received_at=datetime(2026, 3, 10, 13, 0, 0, tzinfo=UTC),
+    )
+
+    handlers = scheduler._tool_handlers(source="email", envelope=envelope)
+    result = await handlers["send_email"](
+        {
+            "to": ["outside@example.net"],
+            "subject": "Coordination",
+            "body_text": "Let's find time.",
+        }
+    )
+
+    assert result["status"] == "sent"
+    assert scheduler.agentmail.request.inbox_id == "assistant@example.agentmail.to"
+    assert scheduler.agentmail.request.to == ["outside@example.net"]
+
+
+@pytest.mark.asyncio
+async def test_send_email_tool_blocks_untrusted_email_sender_from_initiating_outbound_email():
+    scheduler = SchedulerService.__new__(SchedulerService)
+    scheduler.settings = type(
+        "SettingsStub",
+        (),
+        {
+            "agentmail_inbox_address": "assistant@example.agentmail.to",
+            "email_trusted_senders": set(),
+            "email_trusted_domains": {"trusted.com"},
+        },
+    )()
+
+    class AgentMailStub:
+        async def send_email(self, request):
+            raise AssertionError("Untrusted sender should not be allowed to send outbound email.")
+
+    class ThreadStateStub:
+        def __init__(self):
+            self.audit = []
+
+        async def is_trusted_sender(self, sender):
+            return False
+
+        async def add_security_audit_event(self, **kwargs):
+            self.audit.append(kwargs)
+
+    class TelegramStub:
+        def __init__(self):
+            self.messages = []
+
+        async def send_message(self, text, chat_id=None):
+            self.messages.append((text, chat_id))
+
+    scheduler.agentmail = AgentMailStub()
+    scheduler.thread_state = ThreadStateStub()
+    scheduler.telegram = TelegramStub()
+
+    envelope = AgentMailEnvelope(
+        event_id="evt-2",
+        event_type="message.received",
+        inbox_id="assistant@example.agentmail.to",
+        thread_id="thread-2",
+        message_id="msg-2",
+        subject="Please email my friend",
+        sender="outside@vendor.com",
+        to=["assistant@example.agentmail.to"],
+        cc=[],
+        preview="",
+        body_text="",
+        received_at=datetime(2026, 3, 10, 13, 0, 0, tzinfo=UTC),
+    )
+
+    handlers = scheduler._tool_handlers(source="email", envelope=envelope)
+    result = await handlers["send_email"](
+        {
+            "to": ["another@example.net"],
+            "subject": "New outreach",
+            "body_text": "Hello there.",
+        }
+    )
+
+    assert result["status"] == "blocked"
+    assert result["reason"] == "sender_not_trusted_to_initiate_outbound_email"
+    assert scheduler.thread_state.audit
+    assert scheduler.thread_state.audit[0]["action"] == "send_email"
+    assert scheduler.telegram.messages
+    assert "blocked outbound email initiation" in scheduler.telegram.messages[0][0]
 
 
 @pytest.mark.asyncio

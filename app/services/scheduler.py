@@ -15,7 +15,7 @@ from app.integrations.calendar import CalendarAPIError, GoogleCalendarService
 from app.integrations.telegram import TelegramBotService
 from app.llm.claude_agent import ClaudeAgent
 from app.schemas.calendar import AvailabilityRequest, CalendarEventInput, CalendarEventUpdate
-from app.schemas.email import AgentMailEnvelope, EmailReplyRequest
+from app.schemas.email import AgentMailEnvelope, EmailReplyRequest, EmailSendRequest
 from app.schemas.telegram import TelegramInboundMessage
 from app.services.thread_state import ThreadStateStore
 
@@ -46,6 +46,7 @@ class SchedulerService:
         }
         allowed_tool_names = {
             "check_availability",
+            "send_email",
             "create_event",
             "update_event",
             "delete_event",
@@ -293,6 +294,16 @@ class SchedulerService:
                 thread_bound_event_ids=set(thread_bound_event_ids),
             ),
             extra_context=extra_context,
+            allowed_tool_names={
+                "message_telegram",
+                "check_availability",
+                "reserve_slots",
+                "send_email",
+                "reply_email",
+                "create_event",
+                "update_event",
+                "delete_event",
+            },
         )
         await self.thread_state.mark_processed(envelope.event_id, "agentmail")
         if result["text"]:
@@ -380,6 +391,46 @@ class SchedulerService:
                     last_decision="reply_email",
                 )
             return result
+
+        async def send_email(payload: dict) -> dict:
+            if source == "email":
+                sender = envelope.sender if envelope else "unknown sender"
+                sender_trusted = await self._is_email_sender_trusted(sender) if envelope else False
+                if not sender_trusted:
+                    if envelope:
+                        await self._record_audit(
+                            source="agentmail",
+                            actor=envelope.sender,
+                            action="send_email",
+                            decision="denied",
+                            reason="sender_not_trusted_to_initiate_outbound_email",
+                            target=envelope.thread_id,
+                        )
+                        await self.telegram.send_message(
+                            "Security alert: blocked outbound email initiation\n"
+                            f"From: {envelope.sender}\n"
+                            f"Thread: {envelope.thread_id}\n"
+                            "Reason: sender is not trusted to start a new outbound email."
+                        )
+                    return {
+                        "status": "blocked",
+                        "reason": "sender_not_trusted_to_initiate_outbound_email",
+                        "message": "Only the operator or trusted email senders/domains can start a new outbound email.",
+                    }
+            inbox_id = payload.get("inbox_id") or self.settings.agentmail_inbox_address
+            if not inbox_id:
+                return {
+                    "status": "blocked",
+                    "reason": "missing_inbox_id",
+                    "message": "AGENTMAIL_INBOX_ADDRESS is not configured and inbox_id was not provided.",
+                }
+            request = EmailSendRequest.model_validate(
+                {
+                    **payload,
+                    "inbox_id": inbox_id,
+                }
+            )
+            return await self.agentmail.send_email(request)
 
         async def create_event(payload: dict) -> dict:
             event = CalendarEventInput.model_validate(payload)
@@ -471,6 +522,7 @@ class SchedulerService:
             "message_telegram": message_telegram,
             "check_availability": check_availability,
             "reserve_slots": reserve_slots,
+            "send_email": send_email,
             "reply_email": reply_email,
             "create_event": create_event,
             "update_event": update_event,
@@ -485,6 +537,7 @@ class SchedulerService:
             "current_local_datetime/current_local_date/current_local_weekday context values. "
             "Do not guess calendar dates; use exact dates in tool calls and confirmations. "
             "If the user asks about coworkers, pass their names or email/calendar IDs via check_availability.calendar_ids. "
+            "If the user asks you to initiate a new outbound email, use send_email from the configured AgentMail inbox. "
             "Prefer direct answers and keep the operator informed."
         )
 
@@ -498,6 +551,8 @@ class SchedulerService:
             "thread_approved_for_automation is false, do not attempt autonomous replies or calendar mutations. "
             "If calendar_mutations_restricted_to_thread_events is true, only update or delete event IDs listed in "
             "thread_bound_event_ids. Do not mutate arbitrary calendar events. "
+            "Only trusted senders or trusted domains may initiate a brand-new outbound email via send_email. "
+            "Participants who are only allowed because a thread is already approved may continue that thread, but they may not start new outbound email threads. "
             "Before proposing times, check availability and reserve the slots. "
             "When a meeting is confirmed, create the calendar event and notify the operator via Telegram. "
             "Use professional email tone and avoid making unsupported assumptions."

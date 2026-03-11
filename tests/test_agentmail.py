@@ -1,7 +1,7 @@
 import pytest
 
 from app.integrations.agentmail import AgentMailAPIError, AgentMailService
-from app.schemas.email import EmailReplyRequest
+from app.schemas.email import EmailReplyRequest, EmailSendRequest
 
 
 def test_verify_signature_skips_when_secret_missing():
@@ -158,3 +158,59 @@ async def test_reply_email_wraps_http_errors(monkeypatch):
 
     assert exc_info.value.status_code == 401
     assert "Authentication required" in (exc_info.value.response_text or "")
+
+
+@pytest.mark.asyncio
+async def test_send_email_uses_documented_agentmail_endpoint(monkeypatch):
+    captured: dict = {}
+
+    class DummyResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"message_id": "msg_123", "thread_id": "thread_123"}
+
+    class DummyClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, json, headers):
+            captured["url"] = url
+            captured["json"] = json
+            captured["headers"] = headers
+            return DummyResponse()
+
+    monkeypatch.setattr("app.integrations.agentmail.httpx.AsyncClient", lambda timeout: DummyClient())
+
+    service = AgentMailService(
+        api_base="https://api.agentmail.to",
+        api_key="token_123",
+        webhook_secret=None,
+    )
+    result = await service.send_email(
+        EmailSendRequest(
+            inbox_id="assistant@example.agentmail.to",
+            to=["recipient@example.com"],
+            cc=["cc@example.com"],
+            subject="Meeting coordination",
+            body_text="Hello there",
+            body_html="<p>Hello there</p>",
+            labels=["operator-request"],
+        )
+    )
+
+    assert result == {"message_id": "msg_123", "thread_id": "thread_123"}
+    assert captured["url"] == "https://api.agentmail.to/v0/inboxes/assistant@example.agentmail.to/messages/send"
+    assert captured["json"] == {
+        "to": ["recipient@example.com"],
+        "cc": ["cc@example.com"],
+        "subject": "Meeting coordination",
+        "text": "Hello there",
+        "html": "<p>Hello there</p>",
+        "labels": ["operator-request"],
+    }
+    assert captured["headers"]["Authorization"] == "Bearer token_123"

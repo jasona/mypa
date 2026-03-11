@@ -152,6 +152,26 @@ class ClaudeAgent:
                 },
             ),
             ToolDefinition(
+                name="send_email",
+                description="Start a new outbound email thread from the configured AgentMail inbox.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "inbox_id": {"type": ["string", "null"]},
+                        "to": {"type": "array", "items": {"type": "string"}},
+                        "cc": {"type": "array", "items": {"type": "string"}},
+                        "bcc": {"type": "array", "items": {"type": "string"}},
+                        "subject": {"type": "string"},
+                        "body_text": {"type": "string"},
+                        "body_html": {"type": ["string", "null"]},
+                        "reply_to": {"type": "array", "items": {"type": "string"}},
+                        "labels": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["to", "subject", "body_text"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolDefinition(
                 name="reply_email",
                 description="Reply to an email thread with a message.",
                 input_schema={

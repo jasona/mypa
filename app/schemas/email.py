@@ -31,3 +31,15 @@ class EmailReplyRequest(BaseModel):
     bcc: list[str] = Field(default_factory=list)
     reply_to: list[str] = Field(default_factory=list)
     reply_all: bool = True
+
+
+class EmailSendRequest(BaseModel):
+    inbox_id: str
+    to: list[str] = Field(default_factory=list)
+    cc: list[str] = Field(default_factory=list)
+    bcc: list[str] = Field(default_factory=list)
+    subject: str
+    body_text: str
+    body_html: str | None = None
+    reply_to: list[str] = Field(default_factory=list)
+    labels: list[str] = Field(default_factory=list)
