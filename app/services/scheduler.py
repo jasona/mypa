@@ -40,9 +40,11 @@ class SchedulerService:
         self.thread_state = thread_state
 
     async def handle_telegram_message(self, message: TelegramInboundMessage) -> str:
+        relative_day_intent = self._resolve_relative_day_intent(message.text, message.sent_at)
         extra_context = {
             **self._runtime_context(message.sent_at),
             "upcoming_events": await self.calendar.upcoming_context(days=14),
+            "resolved_relative_day": relative_day_intent,
         }
         allowed_tool_names = {
             "check_availability",
@@ -148,6 +150,7 @@ class SchedulerService:
             status=current.status,
             approved_for_automation=True,
             summary=current.summary,
+            intent_json=getattr(current, "intent_json", None),
             last_message_id=current.last_message_id,
             last_decision=current.last_decision,
         )
@@ -214,6 +217,7 @@ class SchedulerService:
             status=existing.status if existing else ThreadStatus.NEW_REQUEST,
             approved_for_automation=thread_approved_for_automation,
             summary=existing.summary if existing else None,
+            intent_json=getattr(existing, "intent_json", None) if existing else None,
             last_message_id=envelope.message_id,
             last_decision=existing.last_decision if existing else None,
         )
@@ -236,7 +240,8 @@ class SchedulerService:
                 metadata={"event_id": envelope.event_id, "subject": envelope.subject},
             )
             await self.telegram.send_message(
-                self._format_untrusted_email_notice(envelope, thread_approved_for_automation)
+                self._format_actionable_untrusted_email_notice(envelope, thread_approved_for_automation),
+                buttons=self._build_untrusted_email_action_buttons(envelope, thread_approved_for_automation),
             )
             return {
                 "status": "blocked",
@@ -258,6 +263,7 @@ class SchedulerService:
             "calendar_mutations_restricted_to_thread_events": restrict_calendar_mutations_to_thread_events,
             "thread_bound_event_ids": thread_bound_event_ids,
             "thread": self._serialize_thread(thread),
+            "thread_intent": self._load_thread_intent(thread),
             "current_message": {
                 "inbox_id": envelope.inbox_id,
                 "message_id": envelope.message_id,
@@ -292,6 +298,7 @@ class SchedulerService:
                 envelope=envelope,
                 restrict_calendar_mutations_to_thread_events=restrict_calendar_mutations_to_thread_events,
                 thread_bound_event_ids=set(thread_bound_event_ids),
+                thread_intent=self._load_thread_intent(thread),
             ),
             extra_context=extra_context,
             allowed_tool_names={
@@ -329,6 +336,7 @@ class SchedulerService:
         telegram_message: TelegramInboundMessage | None = None,
         restrict_calendar_mutations_to_thread_events: bool = False,
         thread_bound_event_ids: set[str] | None = None,
+        thread_intent: dict | None = None,
     ):
         bound_event_ids = thread_bound_event_ids or set()
 
@@ -339,6 +347,14 @@ class SchedulerService:
 
         async def check_availability(payload: dict) -> dict:
             request = AvailabilityRequest.model_validate(payload)
+            constraint_error = self._validate_thread_date_range_constraint(
+                start_at=request.start_at,
+                end_at=request.end_at,
+                thread_intent=thread_intent,
+                tool_name="check_availability",
+            )
+            if constraint_error:
+                return constraint_error
             result = await self.calendar.check_availability(request)
             return {
                 "queried_calendar_ids": result.queried_calendar_ids,
@@ -349,6 +365,13 @@ class SchedulerService:
         async def reserve_slots(payload: dict) -> dict:
             thread_id = payload["thread_id"]
             timezone = payload["timezone"]
+            constraint_error = self._validate_thread_slot_constraint(
+                slots=payload["slots"],
+                thread_intent=thread_intent,
+                tool_name="reserve_slots",
+            )
+            if constraint_error:
+                return constraint_error
             saved = []
             for slot in payload["slots"]:
                 proposal = ProposalRecord(
@@ -368,6 +391,7 @@ class SchedulerService:
                 status=ThreadStatus.TIMES_PROPOSED,
                 approved_for_automation=current.approved_for_automation if current else False,
                 summary=current.summary if current else None,
+                intent_json=getattr(current, "intent_json", None) if current else None,
                 last_message_id=current.last_message_id if current else None,
                 last_decision="reserved_slots",
             )
@@ -387,6 +411,7 @@ class SchedulerService:
                     status=ThreadStatus.AWAITING_CONFIRMATION,
                     approved_for_automation=current.approved_for_automation,
                     summary=current.summary,
+                    intent_json=getattr(current, "intent_json", None),
                     last_message_id=request.message_id,
                     last_decision="reply_email",
                 )
@@ -430,10 +455,22 @@ class SchedulerService:
                     "inbox_id": inbox_id,
                 }
             )
-            return await self.agentmail.send_email(request)
+            result = await self.agentmail.send_email(request)
+            if source == "telegram":
+                await self._auto_trust_operator_email_recipients(request)
+                await self._persist_operator_thread_intent(request, result, telegram_message)
+            return result
 
         async def create_event(payload: dict) -> dict:
             event = CalendarEventInput.model_validate(payload)
+            constraint_error = self._validate_thread_date_range_constraint(
+                start_at=event.start_at,
+                end_at=event.end_at,
+                thread_intent=thread_intent,
+                tool_name="create_event",
+            )
+            if constraint_error:
+                return constraint_error
             if envelope:
                 current = await self.thread_state.get_thread(envelope.thread_id)
                 if current and current.status == ThreadStatus.CONFIRMED:
@@ -454,6 +491,7 @@ class SchedulerService:
                     status=ThreadStatus.CONFIRMED,
                     approved_for_automation=current.approved_for_automation if current else False,
                     summary=current.summary if current else None,
+                    intent_json=getattr(current, "intent_json", None) if current else None,
                     last_message_id=envelope.message_id,
                     last_decision="create_event",
                 )
@@ -539,6 +577,8 @@ class SchedulerService:
             "Resolve relative dates like today, tomorrow, and next Tuesday using the provided "
             "current_local_datetime/current_local_date/current_local_weekday context values. "
             "Do not guess calendar dates; use exact dates in tool calls and confirmations. "
+            "If resolved_relative_day is present in context, treat it as authoritative and include that absolute date "
+            "when drafting outbound scheduling emails. "
             "If the user asks about coworkers, pass their names or email/calendar IDs via check_availability.calendar_ids. "
             "If the user asks you to initiate a new outbound email, use send_email from the configured AgentMail inbox. "
             "Prefer direct answers and keep the operator informed."
@@ -550,6 +590,8 @@ class SchedulerService:
             "Resolve relative dates like next Tuesday using the provided "
             "current_local_datetime/current_local_date/current_local_weekday context values. "
             "Do not guess calendar dates; use exact dates in availability checks, proposals, and event creation. "
+            "If thread_intent.canonical_local_date is present, preserve that date across replies, availability checks, "
+            "proposals, and event creation. When referring to that day in email text, include the absolute date. "
             "Email sender trust is provided in context; if email_automation_trust_enforced is true and "
             "thread_approved_for_automation is false, do not attempt autonomous replies or calendar mutations. "
             "If calendar_mutations_restricted_to_thread_events is true, only update or delete event IDs listed in "
@@ -587,6 +629,7 @@ class SchedulerService:
             "status": thread.status.value,
             "approved_for_automation": thread.approved_for_automation,
             "summary": thread.summary,
+            "intent": SchedulerService._load_thread_intent(thread),
             "last_message_id": thread.last_message_id,
             "last_decision": thread.last_decision,
             "updated_at": thread.updated_at.isoformat(),
@@ -651,10 +694,9 @@ class SchedulerService:
     ) -> str:
         subject = envelope.subject or "(no subject)"
         status = (
-            "thread remains approved for automation."
+            "Thread is already approved for automation."
             if thread_approved_for_automation
-            else "Reply with /trust_sender "
-            f"{envelope.sender.strip().lower()} to trust this sender, process queued email, and allow future automation."
+            else "Choose an action below to trust or reject this sender or thread."
         )
         return (
             "🚫 Email automation blocked for untrusted sender\n"
@@ -733,6 +775,234 @@ class SchedulerService:
             target=target,
             metadata_json=json.dumps(metadata or {}, default=str),
         )
+
+    async def _auto_trust_operator_email_recipients(self, request: EmailSendRequest) -> None:
+        if self.thread_state is None:
+            return
+        recipients = {
+            address.strip().lower()
+            for address in [*request.to, *request.cc, *request.bcc]
+            if address and address.strip()
+        }
+        if not recipients:
+            return
+        for recipient in sorted(recipients):
+            await self.thread_state.add_trusted_sender(recipient)
+        await self._record_audit(
+            source="telegram",
+            actor="admin",
+            action="auto_trust_sender",
+            decision="allowed",
+            reason="operator_initiated_outbound_email",
+            target=request.subject,
+            metadata={"trusted_recipients": sorted(recipients)},
+        )
+
+    async def _persist_operator_thread_intent(
+        self,
+        request: EmailSendRequest,
+        result: dict,
+        telegram_message: TelegramInboundMessage | None,
+    ) -> None:
+        if self.thread_state is None or telegram_message is None:
+            return
+        thread_id = str(result.get("thread_id") or "").strip()
+        if not thread_id:
+            return
+        existing = await self.thread_state.get_thread(thread_id)
+        thread_intent = self._resolve_relative_day_intent(telegram_message.text, telegram_message.sent_at)
+        participants = sorted({*request.to, *request.cc, *request.bcc})
+        await self.thread_state.upsert_thread(
+            thread_id=thread_id,
+            subject=request.subject,
+            participants=participants,
+            status=existing.status if existing else ThreadStatus.NEW_REQUEST,
+            approved_for_automation=True,
+            summary=existing.summary if existing else None,
+            intent_json=json.dumps(thread_intent, default=str) if thread_intent else (getattr(existing, "intent_json", None) if existing else None),
+            last_message_id=str(result.get("message_id") or "").strip() or (existing.last_message_id if existing else None),
+            last_decision="send_email",
+        )
+
+    def _resolve_relative_day_intent(self, text: str, reference_at: datetime) -> dict | None:
+        lowered = text.lower()
+        localized = self._localize_datetime(reference_at)
+        matches: list[tuple[int, str, datetime, str]] = []
+        weekdays = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+
+        for match in re.finditer(r"\bnext\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", lowered):
+            weekday = match.group(1)
+            resolved = self._resolve_named_weekday(localized, weekday, next_week=True)
+            matches.append((match.start(), match.group(0), resolved, "next_weekday"))
+
+        for keyword, delta_days in (("today", 0), ("tomorrow", 1), ("yesterday", -1)):
+            for match in re.finditer(rf"\b{keyword}\b", lowered):
+                matches.append((match.start(), keyword, localized + timedelta(days=delta_days), keyword))
+
+        for weekday in weekdays:
+            pattern = rf"(?<!next )\b{weekday}\b"
+            for match in re.finditer(pattern, lowered):
+                resolved = self._resolve_named_weekday(localized, weekday, next_week=False)
+                matches.append((match.start(), weekday, resolved, "weekday"))
+
+        if not matches:
+            return None
+
+        matches.sort(key=lambda item: item[0])
+        resolved_dates = {match[2].date().isoformat() for match in matches}
+        if len(resolved_dates) > 1:
+            return None
+
+        _, phrase, resolved_at, resolution_kind = matches[0]
+        return {
+            "origin": "telegram",
+            "operator_prompt": text.strip()[:300],
+            "relative_day_phrase": phrase,
+            "resolution_kind": resolution_kind,
+            "canonical_local_date": resolved_at.date().isoformat(),
+            "canonical_local_weekday": resolved_at.strftime("%A"),
+            "canonical_timezone": self.settings.app_timezone,
+        }
+
+    @staticmethod
+    def _resolve_named_weekday(reference_at: datetime, weekday_name: str, *, next_week: bool) -> datetime:
+        weekday_lookup = {
+            "monday": 0,
+            "tuesday": 1,
+            "wednesday": 2,
+            "thursday": 3,
+            "friday": 4,
+            "saturday": 5,
+            "sunday": 6,
+        }
+        target_weekday = weekday_lookup[weekday_name]
+        delta_days = (target_weekday - reference_at.weekday()) % 7
+        if delta_days <= 0:
+            delta_days += 7
+        if next_week:
+            delta_days += 7
+        return reference_at + timedelta(days=delta_days)
+
+    @staticmethod
+    def _load_thread_intent(thread) -> dict | None:
+        if not thread or not getattr(thread, "intent_json", None):
+            return None
+        try:
+            payload = json.loads(thread.intent_json)
+        except (TypeError, json.JSONDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _validate_thread_date_range_constraint(
+        self,
+        *,
+        start_at: datetime,
+        end_at: datetime,
+        thread_intent: dict | None,
+        tool_name: str,
+    ) -> dict | None:
+        canonical_local_date = self._thread_canonical_local_date(thread_intent)
+        if not canonical_local_date:
+            return None
+        timezone_name = str(thread_intent.get("canonical_timezone") or self.settings.app_timezone)
+        start_date = self._convert_to_timezone(start_at, timezone_name).date().isoformat()
+        end_date = self._convert_to_timezone(end_at, timezone_name).date().isoformat()
+        if start_date == canonical_local_date and end_date == canonical_local_date:
+            return None
+        return self._thread_date_constraint_error(tool_name, thread_intent)
+
+    def _validate_thread_slot_constraint(
+        self,
+        *,
+        slots: list[dict],
+        thread_intent: dict | None,
+        tool_name: str,
+    ) -> dict | None:
+        canonical_local_date = self._thread_canonical_local_date(thread_intent)
+        if not canonical_local_date:
+            return None
+        timezone_name = str(thread_intent.get("canonical_timezone") or self.settings.app_timezone)
+        for slot in slots:
+            start_at = datetime.fromisoformat(str(slot["start_at"]).replace("Z", "+00:00"))
+            end_at = datetime.fromisoformat(str(slot["end_at"]).replace("Z", "+00:00"))
+            start_date = self._convert_to_timezone(start_at, timezone_name).date().isoformat()
+            end_date = self._convert_to_timezone(end_at, timezone_name).date().isoformat()
+            if start_date != canonical_local_date or end_date != canonical_local_date:
+                return self._thread_date_constraint_error(tool_name, thread_intent)
+        return None
+
+    @staticmethod
+    def _thread_canonical_local_date(thread_intent: dict | None) -> str | None:
+        if not thread_intent:
+            return None
+        value = thread_intent.get("canonical_local_date")
+        if not isinstance(value, str) or not value.strip():
+            return None
+        return value.strip()
+
+    def _thread_date_constraint_error(self, tool_name: str, thread_intent: dict | None) -> dict:
+        canonical_local_date = self._thread_canonical_local_date(thread_intent)
+        canonical_weekday = (thread_intent or {}).get("canonical_local_weekday")
+        timezone_name = (thread_intent or {}).get("canonical_timezone") or self.settings.app_timezone
+        return {
+            "status": "blocked",
+            "reason": "thread_date_constraint_mismatch",
+            "tool_name": tool_name,
+            "canonical_local_date": canonical_local_date,
+            "canonical_local_weekday": canonical_weekday,
+            "canonical_timezone": timezone_name,
+            "message": (
+                f"This thread is locked to {canonical_weekday} ({canonical_local_date}) in {timezone_name}. "
+                "Retry with exact timestamps on that date."
+            ),
+        }
+
+    @staticmethod
+    def _convert_to_timezone(value: datetime, timezone_name: str) -> datetime:
+        timezone = ZoneInfo(timezone_name)
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone)
+        return value.astimezone(timezone)
+
+    def _format_actionable_untrusted_email_notice(
+        self,
+        envelope: AgentMailEnvelope,
+        thread_approved_for_automation: bool,
+    ) -> str:
+        subject = envelope.subject or "(no subject)"
+        status = (
+            "Thread is already approved for automation."
+            if thread_approved_for_automation
+            else "Choose an action below to trust or reject this sender or thread."
+        )
+        return (
+            "Email automation blocked for an untrusted sender.\n"
+            f"From: {envelope.sender}\n"
+            f"Thread: {envelope.thread_id}\n"
+            f"Subject: {subject}\n"
+            f"Status: {status}"
+        )
+
+    @staticmethod
+    def _build_untrusted_email_action_buttons(
+        envelope: AgentMailEnvelope,
+        thread_approved_for_automation: bool,
+    ) -> list[list[dict[str, str]]]:
+        normalized_sender = envelope.sender.strip().lower()
+        buttons = [
+            [
+                {"text": "Trust sender", "callback_data": f"trust_sender|{normalized_sender}"},
+                {"text": "Reject sender", "callback_data": f"reject_sender|{normalized_sender}"},
+            ]
+        ]
+        if not thread_approved_for_automation:
+            buttons.append(
+                [
+                    {"text": "Trust thread", "callback_data": f"trust_thread|{envelope.thread_id}"},
+                    {"text": "Reject thread", "callback_data": f"reject_thread|{envelope.thread_id}"},
+                ]
+            )
+        return buttons
 
     async def handle_duplicate_agentmail_event(self, event_id: str) -> None:
         await self._record_audit(

@@ -4,8 +4,8 @@ import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 
-from telegram import Update
-from telegram.ext import Application, ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 from app.schemas.telegram import TelegramInboundMessage
 
@@ -58,6 +58,7 @@ class TelegramBotService:
         self.application.add_handler(CommandHandler("reject_sender", self._handle_reject_sender))
         self.application.add_handler(CommandHandler("trust_thread", self._handle_trust_thread))
         self.application.add_handler(CommandHandler("reject_thread", self._handle_reject_thread))
+        self.application.add_handler(CallbackQueryHandler(self._handle_callback_action))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_text))
         await self.application.initialize()
         await self.application.start()
@@ -73,7 +74,12 @@ class TelegramBotService:
         await self.application.shutdown()
         logger.info("Telegram polling stopped.")
 
-    async def send_message(self, text: str, chat_id: str | None = None) -> None:
+    async def send_message(
+        self,
+        text: str,
+        chat_id: str | None = None,
+        buttons: list[list[dict[str, str]]] | None = None,
+    ) -> None:
         if not self.application:
             logger.info("Telegram send skipped because application is not started: %s", text)
             return
@@ -81,7 +87,8 @@ class TelegramBotService:
         if not target_chat:
             logger.warning("Telegram chat_id missing; message dropped.")
             return
-        await self.application.bot.send_message(chat_id=target_chat, text=text)
+        reply_markup = self._build_reply_markup(buttons)
+        await self.application.bot.send_message(chat_id=target_chat, text=text, reply_markup=reply_markup)
 
     async def _handle_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorize_update(update):
@@ -147,6 +154,58 @@ class TelegramBotService:
         reply = await callback(sender)
         if reply:
             await update.effective_message.reply_text(reply)
+
+    async def _handle_callback_action(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._authorize_update(update):
+            return
+        query = update.callback_query
+        if not query or not query.data:
+            return
+        await query.answer()
+        command_name, _, argument = query.data.partition("|")
+        callback = self._resolve_action_callback(command_name)
+        if not callback:
+            await query.edit_message_reply_markup(reply_markup=None)
+            if query.message:
+                await query.message.reply_text("This action is not configured.")
+            return
+        if not argument.strip():
+            await query.edit_message_reply_markup(reply_markup=None)
+            if query.message:
+                await query.message.reply_text(f"Missing action value for {command_name}.")
+            return
+        reply = await callback(argument.strip())
+        await query.edit_message_reply_markup(reply_markup=None)
+        if query.message and reply:
+            await query.message.reply_text(reply)
+
+    def _resolve_action_callback(self, command_name: str) -> TelegramAdminCallback | None:
+        callbacks = {
+            "trust_sender": self.on_trust_sender,
+            "reject_sender": self.on_reject_sender,
+            "trust_thread": self.on_trust_thread,
+            "reject_thread": self.on_reject_thread,
+        }
+        return callbacks.get(command_name)
+
+    @staticmethod
+    def _build_reply_markup(buttons: list[list[dict[str, str]]] | None) -> InlineKeyboardMarkup | None:
+        if not buttons:
+            return None
+        keyboard = []
+        for row in buttons:
+            keyboard_row = []
+            for button in row:
+                text = button.get("text", "").strip()
+                callback_data = button.get("callback_data", "").strip()
+                if not text or not callback_data:
+                    continue
+                keyboard_row.append(InlineKeyboardButton(text=text, callback_data=callback_data))
+            if keyboard_row:
+                keyboard.append(keyboard_row)
+        if not keyboard:
+            return None
+        return InlineKeyboardMarkup(keyboard)
 
     def is_inbound_chat_allowed(self, chat_id: str, chat_type: str) -> bool:
         if chat_type != "private" and not self.allow_group_chats:

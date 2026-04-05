@@ -46,6 +46,7 @@ class ThreadStateStore:
         status: ThreadStatus,
         approved_for_automation: bool = False,
         summary: str | None = None,
+        intent_json: str | None = None,
         last_message_id: str | None = None,
         last_decision: str | None = None,
     ) -> ThreadRecord:
@@ -56,6 +57,7 @@ class ThreadStateStore:
             status=status,
             approved_for_automation=approved_for_automation,
             summary=summary,
+            intent_json=intent_json,
             last_message_id=last_message_id,
             last_decision=last_decision,
             updated_at=datetime.now(UTC),

@@ -35,6 +35,7 @@ class SQLiteStore:
                     status TEXT NOT NULL,
                     approved_for_automation INTEGER NOT NULL DEFAULT 0,
                     summary TEXT,
+                    intent_json TEXT,
                     last_message_id TEXT,
                     last_decision TEXT,
                     updated_at TEXT NOT NULL
@@ -47,6 +48,8 @@ class SQLiteStore:
                 await db.execute(
                     "ALTER TABLE threads ADD COLUMN approved_for_automation INTEGER NOT NULL DEFAULT 0"
                 )
+            if "intent_json" not in thread_columns:
+                await db.execute("ALTER TABLE threads ADD COLUMN intent_json TEXT")
             await db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS proposals (
@@ -133,7 +136,7 @@ class SQLiteStore:
         async with aiosqlite.connect(self.path) as db:
             cursor = await db.execute(
                 """
-                SELECT thread_id, subject, participants_json, status, approved_for_automation, summary, last_message_id, last_decision, updated_at
+                SELECT thread_id, subject, participants_json, status, approved_for_automation, summary, intent_json, last_message_id, last_decision, updated_at
                 FROM threads
                 WHERE thread_id = ?
                 """,
@@ -149,9 +152,10 @@ class SQLiteStore:
             status=ThreadStatus(row[3]),
             approved_for_automation=bool(row[4]),
             summary=row[5],
-            last_message_id=row[6],
-            last_decision=row[7],
-            updated_at=datetime.fromisoformat(row[8]),
+            intent_json=row[6],
+            last_message_id=row[7],
+            last_decision=row[8],
+            updated_at=datetime.fromisoformat(row[9]),
         )
 
     async def list_threads(
@@ -163,7 +167,7 @@ class SQLiteStore:
     ) -> list[ThreadRecord]:
         query = (
             "SELECT thread_id, subject, participants_json, status, approved_for_automation, summary, "
-            "last_message_id, last_decision, updated_at FROM threads"
+            "intent_json, last_message_id, last_decision, updated_at FROM threads"
         )
         params: list[object] = []
         clauses: list[str] = []
@@ -189,9 +193,10 @@ class SQLiteStore:
                 status=ThreadStatus(row[3]),
                 approved_for_automation=bool(row[4]),
                 summary=row[5],
-                last_message_id=row[6],
-                last_decision=row[7],
-                updated_at=datetime.fromisoformat(row[8]),
+                intent_json=row[6],
+                last_message_id=row[7],
+                last_decision=row[8],
+                updated_at=datetime.fromisoformat(row[9]),
             )
             for row in rows
         ]
@@ -201,14 +206,15 @@ class SQLiteStore:
             await db.execute(
                 """
                 INSERT INTO threads (
-                    thread_id, subject, participants_json, status, approved_for_automation, summary, last_message_id, last_decision, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    thread_id, subject, participants_json, status, approved_for_automation, summary, intent_json, last_message_id, last_decision, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(thread_id) DO UPDATE SET
                     subject = excluded.subject,
                     participants_json = excluded.participants_json,
                     status = excluded.status,
                     approved_for_automation = excluded.approved_for_automation,
                     summary = excluded.summary,
+                    intent_json = excluded.intent_json,
                     last_message_id = excluded.last_message_id,
                     last_decision = excluded.last_decision,
                     updated_at = excluded.updated_at
@@ -220,6 +226,7 @@ class SQLiteStore:
                     record.status.value,
                     int(record.approved_for_automation),
                     record.summary,
+                    record.intent_json,
                     record.last_message_id,
                     record.last_decision,
                     record.updated_at.isoformat(),

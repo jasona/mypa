@@ -21,6 +21,7 @@ async def test_thread_and_proposals_round_trip(tmp_path):
             status=ThreadStatus.NEW_REQUEST,
             approved_for_automation=True,
             summary="new request",
+            intent_json='{"canonical_local_date":"2026-04-03"}',
             last_message_id="msg-1",
             last_decision="created",
             updated_at=datetime.now(UTC),
@@ -31,6 +32,7 @@ async def test_thread_and_proposals_round_trip(tmp_path):
     assert thread is not None
     assert thread.subject == "Scheduling"
     assert thread.approved_for_automation is True
+    assert thread.intent_json == '{"canonical_local_date":"2026-04-03"}'
 
     proposal = ProposalRecord(
         proposal_id="proposal-1",

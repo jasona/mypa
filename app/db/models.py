@@ -30,6 +30,7 @@ class ThreadRecord(BaseModel):
     status: ThreadStatus = ThreadStatus.NEW_REQUEST
     approved_for_automation: bool = False
     summary: str | None = None
+    intent_json: str | None = None
     last_message_id: str | None = None
     last_decision: str | None = None
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

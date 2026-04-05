@@ -54,3 +54,19 @@ def test_telegram_service_can_allow_groups_when_enabled():
     )
 
     assert service.is_inbound_chat_allowed("123456789", "group")
+
+
+def test_telegram_service_builds_inline_keyboard_markup():
+    markup = TelegramBotService._build_reply_markup(
+        [
+            [
+                {"text": "Trust sender", "callback_data": "trust_sender|person@example.com"},
+                {"text": "Reject sender", "callback_data": "reject_sender|person@example.com"},
+            ]
+        ]
+    )
+
+    assert markup is not None
+    assert markup.inline_keyboard[0][0].text == "Trust sender"
+    assert markup.inline_keyboard[0][0].callback_data == "trust_sender|person@example.com"
+    assert markup.inline_keyboard[0][1].text == "Reject sender"

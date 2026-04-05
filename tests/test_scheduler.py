@@ -200,6 +200,21 @@ async def test_handle_telegram_message_passes_local_date_context():
     assert captured["extra_context"]["current_local_datetime"].startswith("2026-03-10T19:30:00")
 
 
+def test_resolve_relative_day_intent_locks_friday_from_thursday():
+    scheduler = SchedulerService.__new__(SchedulerService)
+    scheduler.settings = type("SettingsStub", (), {"app_timezone": "America/Phoenix"})()
+
+    resolved = scheduler._resolve_relative_day_intent(
+        "Send an email to a guy and schedule a meeting for Friday.",
+        datetime.fromisoformat("2026-04-02T10:00:00-07:00"),
+    )
+
+    assert resolved is not None
+    assert resolved["canonical_local_date"] == "2026-04-03"
+    assert resolved["canonical_local_weekday"] == "Friday"
+    assert resolved["relative_day_phrase"] == "friday"
+
+
 @pytest.mark.asyncio
 async def test_handle_telegram_message_allows_send_email_tool():
     captured: dict = {}
@@ -319,8 +334,8 @@ async def test_handle_email_blocks_untrusted_sender_when_policy_enabled():
         def __init__(self):
             self.messages = []
 
-        async def send_message(self, text, chat_id=None):
-            self.messages.append((text, chat_id))
+        async def send_message(self, text, chat_id=None, buttons=None):
+            self.messages.append((text, chat_id, buttons))
 
     class AgentStub:
         async def run(self, **kwargs):
@@ -354,8 +369,17 @@ async def test_handle_email_blocks_untrusted_sender_when_policy_enabled():
     assert scheduler.thread_state.marked == ("evt-1", "agentmail")
     assert scheduler.thread_state.queued is not None
     assert scheduler.telegram.messages
-    assert "🚫 Email automation blocked for untrusted sender" in scheduler.telegram.messages[0][0]
-    assert "/trust_sender attacker@evil.com" in scheduler.telegram.messages[0][0]
+    assert "Email automation blocked for an untrusted sender." in scheduler.telegram.messages[0][0]
+    assert scheduler.telegram.messages[0][2] == [
+        [
+            {"text": "Trust sender", "callback_data": "trust_sender|attacker@evil.com"},
+            {"text": "Reject sender", "callback_data": "reject_sender|attacker@evil.com"},
+        ],
+        [
+            {"text": "Trust thread", "callback_data": "trust_thread|thread-1"},
+            {"text": "Reject thread", "callback_data": "reject_thread|thread-1"},
+        ],
+    ]
 
 
 @pytest.mark.asyncio
@@ -380,6 +404,7 @@ async def test_handle_email_allows_untrusted_sender_on_approved_thread():
         status = ThreadStatus.TIMES_PROPOSED
         approved_for_automation = True
         summary = "approved"
+        intent_json = '{"canonical_local_date":"2026-04-03","canonical_local_weekday":"Friday","canonical_timezone":"UTC"}'
         last_message_id = "msg-1"
         last_decision = "reply_email"
         updated_at = datetime.now(UTC)
@@ -453,6 +478,7 @@ async def test_handle_email_allows_untrusted_sender_on_approved_thread():
     assert result["text"] == "processed"
     assert captured["extra_context"]["sender_trusted"] is False
     assert captured["extra_context"]["thread_approved_for_automation"] is True
+    assert captured["extra_context"]["thread_intent"]["canonical_local_date"] == "2026-04-03"
     assert scheduler.thread_state.upsert_kwargs["approved_for_automation"] is True
     assert scheduler.thread_state.marked == ("evt-2", "agentmail")
 
@@ -493,6 +519,73 @@ async def test_send_email_tool_uses_configured_inbox_for_operator_requests():
     assert scheduler.agentmail.request.inbox_id == "assistant@example.agentmail.to"
     assert scheduler.agentmail.request.to == ["outside@example.com"]
     assert scheduler.agentmail.request.subject == "Meeting coordination"
+
+
+@pytest.mark.asyncio
+async def test_send_email_tool_auto_trusts_operator_recipients():
+    scheduler = SchedulerService.__new__(SchedulerService)
+    scheduler.settings = type(
+        "SettingsStub",
+        (),
+        {
+            "agentmail_inbox_address": "assistant@example.agentmail.to",
+            "app_timezone": "America/Phoenix",
+        },
+    )()
+
+    class AgentMailStub:
+        async def send_email(self, request):
+            return {"status": "sent", "message_id": "msg-1", "thread_id": "thread-1"}
+
+    class ThreadStateStub:
+        def __init__(self):
+            self.trusted = []
+            self.audit = []
+            self.upserts = []
+
+        async def add_trusted_sender(self, sender):
+            self.trusted.append(sender)
+
+        async def add_security_audit_event(self, **kwargs):
+            self.audit.append(kwargs)
+
+        async def get_thread(self, thread_id):
+            return None
+
+        async def upsert_thread(self, **kwargs):
+            self.upserts.append(kwargs)
+
+    scheduler.agentmail = AgentMailStub()
+    scheduler.thread_state = ThreadStateStub()
+    scheduler.telegram = None
+
+    from app.schemas.telegram import TelegramInboundMessage
+
+    handlers = scheduler._tool_handlers(
+        source="telegram",
+        telegram_message=TelegramInboundMessage(
+            chat_id="123",
+            text="Email outside@example.com and schedule a meeting for Friday",
+            message_id="1",
+            sent_at=datetime.fromisoformat("2026-04-02T09:00:00-07:00"),
+        ),
+    )
+    result = await handlers["send_email"](
+        {
+            "to": ["Outside@example.com"],
+            "cc": ["partner@example.com"],
+            "bcc": ["outside@example.com"],
+            "subject": "Meeting coordination",
+            "body_text": "Can we meet next week?",
+        }
+    )
+
+    assert result["status"] == "sent"
+    assert scheduler.thread_state.trusted == ["outside@example.com", "partner@example.com"]
+    assert scheduler.thread_state.audit[0]["action"] == "auto_trust_sender"
+    assert "outside@example.com" in scheduler.thread_state.audit[0]["metadata_json"]
+    assert scheduler.thread_state.upserts[0]["approved_for_automation"] is True
+    assert "2026-04-03" in (scheduler.thread_state.upserts[0]["intent_json"] or "")
 
 
 @pytest.mark.asyncio
@@ -976,5 +1069,40 @@ async def test_email_created_events_are_bound_to_thread():
 
     assert result["id"] == "evt-created"
     assert scheduler.thread_state.bound == [("thread-1", "evt-created")]
+
+
+@pytest.mark.asyncio
+async def test_thread_date_constraint_blocks_wrong_day_event_creation():
+    scheduler = SchedulerService.__new__(SchedulerService)
+
+    class CalendarStub:
+        async def create_event(self, event):
+            raise AssertionError("Event creation should be blocked before reaching the calendar service.")
+
+    scheduler.calendar = CalendarStub()
+    scheduler.thread_state = None
+    scheduler.telegram = None
+
+    handlers = scheduler._tool_handlers(
+        source="email",
+        thread_intent={
+            "canonical_local_date": "2026-04-03",
+            "canonical_local_weekday": "Friday",
+            "canonical_timezone": "America/Phoenix",
+        },
+    )
+
+    result = await handlers["create_event"](
+        {
+            "title": "Meeting",
+            "start_at": "2026-04-04T10:00:00-07:00",
+            "end_at": "2026-04-04T10:30:00-07:00",
+            "timezone": "America/Phoenix",
+        }
+    )
+
+    assert result["status"] == "blocked"
+    assert result["reason"] == "thread_date_constraint_mismatch"
+    assert result["canonical_local_date"] == "2026-04-03"
 
 
